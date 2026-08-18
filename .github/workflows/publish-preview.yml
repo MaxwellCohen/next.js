@@ -61,8 +61,10 @@ jobs:
       - name: Vendor custom React
         run: pnpm --filter=next exec taskr copy_vendor_react
 
+      # Use turbo so workspace deps (^build) like @next/polyfill-* are built
+      # before packages/next. Plain `taskr release` fails without those dist files.
       - name: Build Next.js
-        run: pnpm --filter=next exec taskr release
+        run: pnpm build --filter=next
 
       - name: Attach published SWC optional dependencies
         run: node scripts/attach-published-swc-optional-deps.js
