@@ -486,6 +486,9 @@ importers:
       pixrem:
         specifier: 5.0.0
         version: 5.0.0
+      pkg-pr-new:
+        specifier: 0.0.88
+        version: 0.0.88
       playwright:
         specifier: 1.61.0
         version: 1.61.0
@@ -523,20 +526,20 @@ importers:
         specifier: npm:react@19.3.0-canary-247fbb45-20260622
         version: 19.3.0-canary-247fbb45-20260622
       react-builtin:
-        specifier: npm:react@19.3.0-canary-247fbb45-20260622
-        version: react@19.3.0-canary-247fbb45-20260622
+        specifier: https://pkg.csb.dev/MaxwellCohen/react/commit/d0148100/react
+        version: react@https://pkg.csb.dev/MaxwellCohen/react/commit/d0148100/react
       react-dom:
         specifier: npm:react-dom@19.3.0-canary-247fbb45-20260622
         version: 19.3.0-canary-247fbb45-20260622(react@19.3.0-canary-247fbb45-20260622)
       react-dom-builtin:
-        specifier: npm:react-dom@19.3.0-canary-247fbb45-20260622
-        version: react-dom@19.3.0-canary-247fbb45-20260622(react@19.3.0-canary-247fbb45-20260622)
+        specifier: https://pkg.csb.dev/MaxwellCohen/react/commit/d0148100/react-dom
+        version: react-dom@https://pkg.csb.dev/MaxwellCohen/react/commit/d0148100/react-dom(react@19.3.0-canary-247fbb45-20260622)
       react-dom-experimental-builtin:
-        specifier: npm:react-dom@0.0.0-experimental-247fbb45-20260622
-        version: react-dom@0.0.0-experimental-247fbb45-20260622(react@19.3.0-canary-247fbb45-20260622)
+        specifier: https://pkg.csb.dev/MaxwellCohen/react/commit/d0148100/react-dom
+        version: react-dom@https://pkg.csb.dev/MaxwellCohen/react/commit/d0148100/react-dom(react@19.3.0-canary-247fbb45-20260622)
       react-experimental-builtin:
-        specifier: npm:react@0.0.0-experimental-247fbb45-20260622
-        version: react@0.0.0-experimental-247fbb45-20260622
+        specifier: https://pkg.csb.dev/MaxwellCohen/react/commit/d0148100/react
+        version: react@https://pkg.csb.dev/MaxwellCohen/react/commit/d0148100/react
       react-is-builtin:
         specifier: npm:react-is@19.3.0-canary-247fbb45-20260622
         version: react-is@19.3.0-canary-247fbb45-20260622
@@ -547,11 +550,11 @@ importers:
         specifier: npm:react-server-dom-turbopack@0.0.0-experimental-247fbb45-20260622
         version: react-server-dom-turbopack@0.0.0-experimental-247fbb45-20260622(react-dom@19.3.0-canary-247fbb45-20260622(react@19.3.0-canary-247fbb45-20260622))(react@19.3.0-canary-247fbb45-20260622)
       react-server-dom-webpack:
-        specifier: npm:react-server-dom-webpack@19.3.0-canary-247fbb45-20260622
-        version: 19.3.0-canary-247fbb45-20260622(react-dom@19.3.0-canary-247fbb45-20260622(react@19.3.0-canary-247fbb45-20260622))(react@19.3.0-canary-247fbb45-20260622)(webpack@5.98.0(@swc/core@1.11.24(@swc/helpers@0.5.15)))
+        specifier: https://pkg.csb.dev/MaxwellCohen/react/commit/d0148100/react-server-dom-webpack
+        version: https://pkg.csb.dev/MaxwellCohen/react/commit/d0148100/react-server-dom-webpack(react-dom@19.3.0-canary-247fbb45-20260622(react@19.3.0-canary-247fbb45-20260622))(react@19.3.0-canary-247fbb45-20260622)(webpack@5.98.0(@swc/core@1.11.24(@swc/helpers@0.5.15)))
       react-server-dom-webpack-experimental:
-        specifier: npm:react-server-dom-webpack@0.0.0-experimental-247fbb45-20260622
-        version: react-server-dom-webpack@0.0.0-experimental-247fbb45-20260622(react-dom@19.3.0-canary-247fbb45-20260622(react@19.3.0-canary-247fbb45-20260622))(react@19.3.0-canary-247fbb45-20260622)(webpack@5.98.0(@swc/core@1.11.24(@swc/helpers@0.5.15)))
+        specifier: https://pkg.csb.dev/MaxwellCohen/react/commit/d0148100/react-server-dom-webpack
+        version: react-server-dom-webpack@https://pkg.csb.dev/MaxwellCohen/react/commit/d0148100/react-server-dom-webpack(react-dom@19.3.0-canary-247fbb45-20260622(react@19.3.0-canary-247fbb45-20260622))(react@19.3.0-canary-247fbb45-20260622)(webpack@5.98.0(@swc/core@1.11.24(@swc/helpers@0.5.15)))
       react-ssr-prepass:
         specifier: 1.0.8
         version: 1.0.8(react-is@19.3.0-canary-247fbb45-20260622)(react@19.3.0-canary-247fbb45-20260622)
@@ -580,11 +583,11 @@ importers:
         specifier: 0.25.0
         version: 0.25.0
       scheduler-builtin:
-        specifier: npm:scheduler@0.28.0-canary-247fbb45-20260622
-        version: scheduler@0.28.0-canary-247fbb45-20260622
+        specifier: https://pkg.csb.dev/MaxwellCohen/react/commit/d0148100/scheduler
+        version: scheduler@https://pkg.csb.dev/MaxwellCohen/react/commit/d0148100/scheduler
       scheduler-experimental-builtin:
-        specifier: npm:scheduler@0.0.0-experimental-247fbb45-20260622
-        version: scheduler@0.0.0-experimental-247fbb45-20260622
+        specifier: https://pkg.csb.dev/MaxwellCohen/react/commit/d0148100/scheduler
+        version: scheduler@https://pkg.csb.dev/MaxwellCohen/react/commit/d0148100/scheduler
       seedrandom:
         specifier: 3.0.5
         version: 3.0.5
@@ -14568,6 +14571,10 @@ packages:
     resolution: {integrity: sha512-HRDzbaKjC+AOWVXxAU/x54COGeIv9eb+6CkDSQoNTt4XyWoIJvuPsXizxu/Fr23EiekbtZwmh1IcIG/l/a10GQ==}
     engines: {node: '>=8'}
 
+  pkg-pr-new@0.0.88:
+    resolution: {integrity: sha512-Xc6PMJ2gher0WZP+rtjefFk26hIb7V1PTLL30bmy1Z2vsRmSvqiss7Ag1XUdyplTGYzIlFNJp4L3vMNmK44N6g==}
+    hasBin: true
+
   pkg-up@3.1.0:
     resolution: {integrity: sha512-nDywThFk1i4BQK4twPQ6TA4RT8bDY96yeuCVBWL3ePARCiEKDRSrNGbFIgUJpLp+XeIR65v8ra7WuJOFUBtkMA==}
     engines: {node: '>=8'}
@@ -15580,15 +15587,16 @@ packages:
     resolution: {integrity: sha512-APPU8HB2uZnpl6Vt/+0AFoVYgSRtfiP6FLrZgPPTDmqSb2R4qZRbgd0A3VzIFxDt5e+Fozjx79WjLWnF69DK8g==}
     engines: {node: '>=16.14.0'}
 
-  react-dom@0.0.0-experimental-247fbb45-20260622:
-    resolution: {integrity: sha512-aU7oTVjr1Hfc9hv8mGDspPBHe7dCN+lbD2lCRGJMGDUn7vu1uB6T67peIp9DxKT0d1GwJQaySlRVJN5An2EWAA==}
-    peerDependencies:
-      react: 0.0.0-experimental-247fbb45-20260622
-
   react-dom@19.3.0-canary-247fbb45-20260622:
     resolution: {integrity: sha512-wHvqRy3Zhhq61bwFvfjb8GXbv1MhGnK9pDTTT4GqUVnVOx59ZGX5Ktv6YOSUpoZNwcMszWH27OFHrS2mSpQULw==}
     peerDependencies:
       react: 19.3.0-canary-247fbb45-20260622
+
+  react-dom@https://pkg.csb.dev/MaxwellCohen/react/commit/d0148100/react-dom:
+    resolution: {tarball: https://pkg.csb.dev/MaxwellCohen/react/commit/d0148100/react-dom}
+    version: 0.0.0-experimental-d0148100-20260806
+    peerDependencies:
+      react: 0.0.0-experimental-d0148100-20260806
 
   react-is@19.3.0-canary-247fbb45-20260622:
     resolution: {integrity: sha512-cEPMAIRKgjdTOHPribCfZZZMKdpgWz3h7//sSBZlI1PM0E7bJxOU08k8/4kPD3JftNIRSBueuu6Y4/YwCxldRQ==}
@@ -15660,20 +15668,13 @@ packages:
       react: 19.3.0-canary-247fbb45-20260622
       react-dom: 19.3.0-canary-247fbb45-20260622
 
-  react-server-dom-webpack@0.0.0-experimental-247fbb45-20260622:
-    resolution: {integrity: sha512-v77y3zsNoqTlsyxXwWhGI/3Kh4yZSlF4dsqvjPdP94OOy1bl1liZZG7bysOZJNzFOLGXqfIlqFRbNLyCQ/LLQA==}
+  react-server-dom-webpack@https://pkg.csb.dev/MaxwellCohen/react/commit/d0148100/react-server-dom-webpack:
+    resolution: {tarball: https://pkg.csb.dev/MaxwellCohen/react/commit/d0148100/react-server-dom-webpack}
+    version: 0.0.0-experimental-d0148100-20260806
     engines: {node: '>=0.10.0'}
     peerDependencies:
-      react: 0.0.0-experimental-247fbb45-20260622
-      react-dom: 0.0.0-experimental-247fbb45-20260622
-      webpack: 5.98.0
-
-  react-server-dom-webpack@19.3.0-canary-247fbb45-20260622:
-    resolution: {integrity: sha512-/M9YbyxYvlTrea2UsCmuBOA/J96OsO5bcm/jQhrVAFh0iQTqTpydN7DOJjRlervkFBM7MLd32gOTBbJ+fsPpjQ==}
-    engines: {node: '>=0.10.0'}
-    peerDependencies:
-      react: 19.3.0-canary-247fbb45-20260622
-      react-dom: 19.3.0-canary-247fbb45-20260622
+      react: 0.0.0-experimental-d0148100-20260806
+      react-dom: 0.0.0-experimental-d0148100-20260806
       webpack: 5.98.0
 
   react-shallow-renderer@16.15.0:
@@ -15724,12 +15725,13 @@ packages:
       react: ^15.3.0 || ^16.0.0-alpha
       react-dom: ^15.3.0 || ^16.0.0-alpha
 
-  react@0.0.0-experimental-247fbb45-20260622:
-    resolution: {integrity: sha512-vqRCxIRqaxexsuP23wkY5uk2ifay186BLNfV28S4x4UmbRXWxgASbG2Hmis09h9zQe6ynC8xvj2V14UzvKIN6w==}
-    engines: {node: '>=0.10.0'}
-
   react@19.3.0-canary-247fbb45-20260622:
     resolution: {integrity: sha512-VIQuzZrjHKDuqj6IrPK6ZKVj7cj5+iwl3kBld6YKfcRSP1eUVYloNOAp8/C8ldh5xTKZGN8wT/IdsBAm9HeNgQ==}
+    engines: {node: '>=0.10.0'}
+
+  react@https://pkg.csb.dev/MaxwellCohen/react/commit/d0148100/react:
+    resolution: {tarball: https://pkg.csb.dev/MaxwellCohen/react/commit/d0148100/react}
+    version: 0.0.0-experimental-d0148100-20260806
     engines: {node: '>=0.10.0'}
 
   read-all-stream@3.1.0:
@@ -16292,11 +16294,12 @@ packages:
     resolution: {integrity: sha512-xAg7SOnEhrm5zI3puOOKyy1OMcMlIJZYNJY7xLBwSze0UjhPLnWfj2GF2EpT0jmzaJKIWKHLsaSSajf35bcYnA==}
     engines: {node: '>=v12.22.7'}
 
-  scheduler@0.0.0-experimental-247fbb45-20260622:
-    resolution: {integrity: sha512-jCaNohScbrZlJ+IoaUF2NyEvy9jV0OjF18mBEmdHwiL9tYdbRzWnYCAw/VYIUV4rVC+t5P3TpKk+xZRHHOgLjA==}
-
   scheduler@0.28.0-canary-247fbb45-20260622:
     resolution: {integrity: sha512-rTgSnI7j9LUOp2hhAPDuTHn4ievmQuRaZcI+oc2eNHe21fAGiFM551bHYv8c5EaxJgbOPaPz8Pukkm3/7J8hmQ==}
+
+  scheduler@https://pkg.csb.dev/MaxwellCohen/react/commit/d0148100/scheduler:
+    resolution: {tarball: https://pkg.csb.dev/MaxwellCohen/react/commit/d0148100/scheduler}
+    version: 0.0.0-experimental-d0148100-20260806
 
   schema-utils@2.7.1:
     resolution: {integrity: sha512-SHiNtMOUGWBQJwzISiVYKu82GiV4QYGePp3odlY1tuKO7gPtphAT5R/py0fA6xtbgLL/RvtJZnU9b8s0F1q0Xg==}
@@ -33789,6 +33792,8 @@ snapshots:
     dependencies:
       find-up: 4.1.0
 
+  pkg-pr-new@0.0.88: {}
+
   pkg-up@3.1.0:
     dependencies:
       find-up: 3.0.0
@@ -34835,12 +34840,12 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  react-dom@0.0.0-experimental-247fbb45-20260622(react@19.3.0-canary-247fbb45-20260622):
+  react-dom@19.3.0-canary-247fbb45-20260622(react@19.3.0-canary-247fbb45-20260622):
     dependencies:
       react: 19.3.0-canary-247fbb45-20260622
       scheduler: 0.28.0-canary-247fbb45-20260622
 
-  react-dom@19.3.0-canary-247fbb45-20260622(react@19.3.0-canary-247fbb45-20260622):
+  react-dom@https://pkg.csb.dev/MaxwellCohen/react/commit/d0148100/react-dom(react@19.3.0-canary-247fbb45-20260622):
     dependencies:
       react: 19.3.0-canary-247fbb45-20260622
       scheduler: 0.28.0-canary-247fbb45-20260622
@@ -34909,16 +34914,7 @@ snapshots:
       react: 19.3.0-canary-247fbb45-20260622
       react-dom: 19.3.0-canary-247fbb45-20260622(react@19.3.0-canary-247fbb45-20260622)
 
-  react-server-dom-webpack@0.0.0-experimental-247fbb45-20260622(react-dom@19.3.0-canary-247fbb45-20260622(react@19.3.0-canary-247fbb45-20260622))(react@19.3.0-canary-247fbb45-20260622)(webpack@5.98.0(@swc/core@1.11.24(@swc/helpers@0.5.15))):
-    dependencies:
-      acorn-loose: 8.3.0
-      neo-async: 2.6.1
-      react: 19.3.0-canary-247fbb45-20260622
-      react-dom: 19.3.0-canary-247fbb45-20260622(react@19.3.0-canary-247fbb45-20260622)
-      webpack: 5.98.0(@swc/core@1.11.24(@swc/helpers@0.5.15))
-      webpack-sources: 3.2.3(patch_hash=26afc15966a3fc37a3d1d366312a95ce66723513f6a3a720e4166a37147da8bd)
-
-  react-server-dom-webpack@19.3.0-canary-247fbb45-20260622(react-dom@19.3.0-canary-247fbb45-20260622(react@19.3.0-canary-247fbb45-20260622))(react@19.3.0-canary-247fbb45-20260622)(webpack@5.98.0(@swc/core@1.11.24(@swc/helpers@0.5.15))):
+  react-server-dom-webpack@https://pkg.csb.dev/MaxwellCohen/react/commit/d0148100/react-server-dom-webpack(react-dom@19.3.0-canary-247fbb45-20260622(react@19.3.0-canary-247fbb45-20260622))(react@19.3.0-canary-247fbb45-20260622)(webpack@5.98.0(@swc/core@1.11.24(@swc/helpers@0.5.15))):
     dependencies:
       acorn-loose: 8.3.0
       neo-async: 2.6.1
@@ -34983,9 +34979,9 @@ snapshots:
       react-dom: 19.3.0-canary-247fbb45-20260622(react@19.3.0-canary-247fbb45-20260622)
       react-lifecycles-compat: 3.0.4
 
-  react@0.0.0-experimental-247fbb45-20260622: {}
-
   react@19.3.0-canary-247fbb45-20260622: {}
+
+  react@https://pkg.csb.dev/MaxwellCohen/react/commit/d0148100/react: {}
 
   read-all-stream@3.1.0:
     dependencies:
@@ -35735,9 +35731,9 @@ snapshots:
     dependencies:
       xmlchars: 2.2.0
 
-  scheduler@0.0.0-experimental-247fbb45-20260622: {}
-
   scheduler@0.28.0-canary-247fbb45-20260622: {}
+
+  scheduler@https://pkg.csb.dev/MaxwellCohen/react/commit/d0148100/scheduler: {}
 
   schema-utils@2.7.1:
     dependencies:
