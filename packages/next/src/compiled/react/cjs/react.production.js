@@ -18,6 +18,7 @@ var REACT_ELEMENT_TYPE = Symbol.for("react.transitional.element"),
   REACT_CONTEXT_TYPE = Symbol.for("react.context"),
   REACT_FORWARD_REF_TYPE = Symbol.for("react.forward_ref"),
   REACT_SUSPENSE_TYPE = Symbol.for("react.suspense"),
+  REACT_SUSPENSE_LIST_TYPE = Symbol.for("react.suspense_list"),
   REACT_MEMO_TYPE = Symbol.for("react.memo"),
   REACT_LAZY_TYPE = Symbol.for("react.lazy"),
   REACT_ACTIVITY_TYPE = Symbol.for("react.activity"),
@@ -30,7 +31,8 @@ function getIteratorFn(maybeIterable) {
     maybeIterable["@@iterator"];
   return "function" === typeof maybeIterable ? maybeIterable : null;
 }
-var ReactNoopUpdateQueue = {
+var REACT_OPTIMISTIC_KEY = Symbol.for("react.optimistic_key"),
+  ReactNoopUpdateQueue = {
     isMounted: function () {
       return !1;
     },
@@ -75,7 +77,7 @@ assign(pureComponentPrototype, Component.prototype);
 pureComponentPrototype.isPureReactComponent = !0;
 var isArrayImpl = Array.isArray;
 function noop() {}
-var ReactSharedInternals = { H: null, A: null, T: null, S: null },
+var ReactSharedInternals = { H: null, A: null, T: null, S: null, G: null },
   hasOwnProperty = Object.prototype.hasOwnProperty;
 function ReactElement(type, key, props) {
   var refProp = props.ref;
@@ -109,7 +111,9 @@ function escape(key) {
 var userProvidedKeyEscapeRegex = /\/+/g;
 function getElementKey(element, index) {
   return "object" === typeof element && null !== element && null != element.key
-    ? escape("" + element.key)
+    ? element.key === REACT_OPTIMISTIC_KEY
+      ? index.toString(36)
+      : escape("" + element.key)
     : index.toString(36);
 }
 function resolveThenable(thenable) {
@@ -289,6 +293,9 @@ function lazyInitializer(payload) {
   if (1 === payload._status) return payload._result.default;
   throw payload._result;
 }
+function useOptimistic(passthrough, reducer) {
+  return ReactSharedInternals.H.useOptimistic(passthrough, reducer);
+}
 var reportGlobalError =
   "function" === typeof reportError
     ? reportError
@@ -323,6 +330,7 @@ function startTransition(scope) {
     currentTransition = {};
   currentTransition.types =
     null !== prevTransition ? prevTransition.types : null;
+  currentTransition.gesture = null;
   ReactSharedInternals.T = currentTransition;
   try {
     var returnValue = scope(),
@@ -418,7 +426,12 @@ exports.cloneElement = function (element, config, children) {
   var props = assign({}, element.props),
     key = element.key;
   if (null != config)
-    for (propName in (void 0 !== config.key && (key = "" + config.key), config))
+    for (propName in (void 0 !== config.key &&
+      (key =
+        config.key === REACT_OPTIMISTIC_KEY
+          ? REACT_OPTIMISTIC_KEY
+          : "" + config.key),
+    config))
       !hasOwnProperty.call(config, propName) ||
         "key" === propName ||
         "__self" === propName ||
@@ -455,7 +468,12 @@ exports.createElement = function (type, config, children) {
     props = {},
     key = null;
   if (null != config)
-    for (propName in (void 0 !== config.key && (key = "" + config.key), config))
+    for (propName in (void 0 !== config.key &&
+      (key =
+        config.key === REACT_OPTIMISTIC_KEY
+          ? REACT_OPTIMISTIC_KEY
+          : "" + config.key),
+    config))
       hasOwnProperty.call(config, propName) &&
         "key" !== propName &&
         "__self" !== propName &&
@@ -477,6 +495,9 @@ exports.createElement = function (type, config, children) {
 exports.createRef = function () {
   return { current: null };
 };
+exports.experimental_useOptimistic = function (passthrough, reducer) {
+  return useOptimistic(passthrough, reducer);
+};
 exports.forwardRef = function (render) {
   return { $$typeof: REACT_FORWARD_REF_TYPE, render: render };
 };
@@ -495,7 +516,39 @@ exports.memo = function (type, compare) {
     compare: void 0 === compare ? null : compare
   };
 };
+exports.optimisticKey = REACT_OPTIMISTIC_KEY;
 exports.startTransition = startTransition;
+exports.unstable_Activity = REACT_ACTIVITY_TYPE;
+exports.unstable_SuspenseList = REACT_SUSPENSE_LIST_TYPE;
+exports.unstable_getCacheForType = function (resourceType) {
+  var dispatcher = ReactSharedInternals.A;
+  return dispatcher ? dispatcher.getCacheForType(resourceType) : resourceType();
+};
+exports.unstable_startGestureTransition = function (provider, scope, options) {
+  if (null == provider)
+    throw Error(
+      "A Timeline is required as the first argument to startGestureTransition."
+    );
+  var prevTransition = ReactSharedInternals.T,
+    currentTransition = { types: null };
+  currentTransition.gesture = provider;
+  ReactSharedInternals.T = currentTransition;
+  try {
+    scope();
+    var onStartGestureTransitionFinish = ReactSharedInternals.G;
+    if (null !== onStartGestureTransitionFinish)
+      return onStartGestureTransitionFinish(
+        currentTransition,
+        provider,
+        options
+      );
+  } catch (error) {
+    reportGlobalError(error);
+  } finally {
+    ReactSharedInternals.T = prevTransition;
+  }
+  return noop;
+};
 exports.unstable_useCacheRefresh = function () {
   return ReactSharedInternals.H.useCacheRefresh();
 };
@@ -536,9 +589,7 @@ exports.useLayoutEffect = function (create, deps) {
 exports.useMemo = function (create, deps) {
   return ReactSharedInternals.H.useMemo(create, deps);
 };
-exports.useOptimistic = function (passthrough, reducer) {
-  return ReactSharedInternals.H.useOptimistic(passthrough, reducer);
-};
+exports.useOptimistic = useOptimistic;
 exports.useReducer = function (reducer, initialArg, init) {
   return ReactSharedInternals.H.useReducer(reducer, initialArg, init);
 };
@@ -562,4 +613,4 @@ exports.useSyncExternalStore = function (
 exports.useTransition = function () {
   return ReactSharedInternals.H.useTransition();
 };
-exports.version = "19.3.0-canary-247fbb45-20260622";
+exports.version = "19.3.0-experimental-d0148100-20260806";

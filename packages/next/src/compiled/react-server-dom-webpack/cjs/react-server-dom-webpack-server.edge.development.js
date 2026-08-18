@@ -12,6 +12,7 @@
 "production" !== process.env.NODE_ENV &&
   (function () {
     function voidHandler() {}
+    function noop() {}
     function getIteratorFn(maybeIterable) {
       if (null === maybeIterable || "object" !== typeof maybeIterable)
         return null;
@@ -496,7 +497,6 @@
       temporaryReferences.set(reference, id);
       return reference;
     }
-    function noop() {}
     function trackUsedThenable(thenableState, thenable, index) {
       index = thenableState[index];
       void 0 === index
@@ -964,6 +964,22 @@
       }
       return JSCompiler_inline_result$jscomp$0;
     }
+    function throwTaintViolation(message) {
+      throw Error(message);
+    }
+    function cleanupTaintQueue(request) {
+      request = request.taintCleanupQueue;
+      TaintRegistryPendingRequests.delete(request);
+      for (var i = 0; i < request.length; i++) {
+        var entryValue = request[i],
+          entry = TaintRegistryValues.get(entryValue);
+        void 0 !== entry &&
+          (1 === entry.count
+            ? TaintRegistryValues.delete(entryValue)
+            : entry.count--);
+      }
+      request.length = 0;
+    }
     function defaultErrorHandler(error) {
       console.error(error);
     }
@@ -992,7 +1008,9 @@
       ReactSharedInternalsServer.getCurrentStack = getCurrentStackInDEV;
       var abortSet = new Set(),
         pingedTasks = [],
-        hints = new Set();
+        cleanupQueue = [];
+      TaintRegistryPendingRequests.add(cleanupQueue);
+      var hints = new Set();
       this.type = type;
       this.status = OPENING;
       this.flushScheduled = !1;
@@ -1015,7 +1033,7 @@
       this.temporaryReferences = temporaryReferences;
       this.identifierPrefix = identifierPrefix || "";
       this.identifierCount = 1;
-      this.taintCleanupQueue = [];
+      this.taintCleanupQueue = cleanupQueue;
       this.onError = void 0 === onError ? defaultErrorHandler : onError;
       this.onAllReady = onAllReady;
       this.onFatalError = onFatalError;
@@ -1422,7 +1440,7 @@
           erroredTask(request, streamTask, reason),
           enqueueFlush(request),
           "function" === typeof iterator.throw &&
-            iterator.throw(reason).then(error, error));
+            iterator.throw(reason).then(noop, noop));
       }
       function abortIterable() {
         if (streamTask.status === PENDING$1) {
@@ -1436,7 +1454,7 @@
             : (erroredTask(request, streamTask, signal.reason),
               enqueueFlush(request));
           "function" === typeof iterator.throw &&
-            iterator.throw(reason).then(error, error);
+            iterator.throw(reason).then(noop, noop);
         }
       }
       var isIterator = iterable === iterator,
@@ -2051,22 +2069,27 @@
         originalValue === jsonValue ||
         originalValue instanceof Date ||
         callWithDebugContextInDEV(request, task, function () {
-          "Object" !== objectName(originalValue)
-            ? "string" === typeof jsxChildrenParents.get(parent)
-              ? console.error(
-                  "%s objects cannot be rendered as text children. Try formatting it using toString().%s",
-                  objectName(originalValue),
-                  describeObjectForErrorMessage(parent, parentPropertyName)
-                )
-              : console.error(
-                  "Only plain objects can be passed to Client Components from Server Components. %s objects are not supported.%s",
-                  objectName(originalValue),
-                  describeObjectForErrorMessage(parent, parentPropertyName)
-                )
-            : console.error(
-                "Only plain objects can be passed to Client Components from Server Components. Objects with toJSON methods are not supported. Convert it manually to a simple value before passing it to props.%s",
+          ArrayBuffer.isView(originalValue)
+            ? console.error(
+                "Binary data with a toJSON method, such as a Node.js Buffer, is serialized through toJSON instead of as binary. Pass a Uint8Array or ArrayBuffer to send binary data.%s",
                 describeObjectForErrorMessage(parent, parentPropertyName)
-              );
+              )
+            : "Object" !== objectName(originalValue)
+              ? "string" === typeof jsxChildrenParents.get(parent)
+                ? console.error(
+                    "%s objects cannot be rendered as text children. Try formatting it using toString().%s",
+                    objectName(originalValue),
+                    describeObjectForErrorMessage(parent, parentPropertyName)
+                  )
+                : console.error(
+                    "Only plain objects can be passed to Client Components from Server Components. %s objects are not supported.%s",
+                    objectName(originalValue),
+                    describeObjectForErrorMessage(parent, parentPropertyName)
+                  )
+              : console.error(
+                  "Only plain objects can be passed to Client Components from Server Components. Objects with toJSON methods are not supported. Convert it manually to a simple value before passing it to props.%s",
+                  describeObjectForErrorMessage(parent, parentPropertyName)
+                );
         });
       value = renderModel(request, task, parent, parentPropertyName, jsonValue);
       if (null === value || "object" !== typeof value) return value;
@@ -2558,6 +2581,8 @@
           void 0 !== elementReference)
         )
           return "$T" + elementReference;
+        elementReference = TaintRegistryObjects.get(value);
+        void 0 !== elementReference && throwTaintViolation(elementReference);
         elementReference = request.writtenObjects;
         _writtenObjects = elementReference.get(value);
         if ("function" === typeof value.then) {
@@ -2695,6 +2720,8 @@
       }
       if ("string" === typeof value)
         return (
+          (task = TaintRegistryValues.get(value)),
+          void 0 !== task && throwTaintViolation(task.message),
           (serializedSize += value.length),
           "Z" === value[value.length - 1] &&
           parent[parentPropertyName] instanceof Date
@@ -2724,6 +2751,8 @@
           void 0 !== request)
         )
           return "$T" + request;
+        request = TaintRegistryObjects.get(value);
+        void 0 !== request && throwTaintViolation(request);
         if (value.$$typeof === TEMPORARY_REFERENCE_TAG)
           throw Error(
             "Could not reference an opaque temporary reference. This is likely due to misconfiguring the temporaryReferences options on the server."
@@ -2772,7 +2801,12 @@
         task.set(value, _writtenObjects);
         return serializeByValueID(_writtenObjects);
       }
-      if ("bigint" === typeof value) return "$n" + value.toString(10);
+      if ("bigint" === typeof value)
+        return (
+          (request = TaintRegistryValues.get(value)),
+          void 0 !== request && throwTaintViolation(request.message),
+          "$n" + value.toString(10)
+        );
       throw Error(
         "Type " +
           typeof value +
@@ -2814,6 +2848,7 @@
     function fatalError(request, error) {
       var onFatalError = request.onFatalError;
       onFatalError(error);
+      cleanupTaintQueue(request);
       null !== request.destination
         ? ((request.status = CLOSED),
           closeWithError(request.destination, error))
@@ -2971,14 +3006,27 @@
       return existingRef;
     }
     function emitTypedArrayChunk(request, id, tag, typedArray, debug) {
+      if (TaintRegistryByteLengths.has(typedArray.byteLength)) {
+        var tainted = TaintRegistryValues.get(
+          String.fromCharCode.apply(
+            String,
+            new Uint8Array(
+              typedArray.buffer,
+              typedArray.byteOffset,
+              typedArray.byteLength
+            )
+          )
+        );
+        void 0 !== tainted && throwTaintViolation(tainted.message);
+      }
       debug ? request.pendingDebugChunks++ : request.pendingChunks++;
       typedArray = new Uint8Array(
         typedArray.buffer,
         typedArray.byteOffset,
         typedArray.byteLength
       );
-      var binaryLength = typedArray.byteLength;
-      id = id.toString(16) + ":" + tag + binaryLength.toString(16) + ",";
+      tainted = typedArray.byteLength;
+      id = id.toString(16) + ":" + tag + tainted.toString(16) + ",";
       id = stringToChunk(id);
       debug
         ? request.completedDebugChunks.push(
@@ -3574,7 +3622,9 @@
     function emitChunk(request, task, value) {
       var id = task.id;
       "string" === typeof value && null !== byteLengthOfChunk
-        ? emitTextChunk(request, id, value, !1)
+        ? ((task = TaintRegistryValues.get(value)),
+          void 0 !== task && throwTaintViolation(task.message),
+          emitTextChunk(request, id, value, !1))
         : value instanceof ArrayBuffer
           ? emitTypedArrayChunk(request, id, "A", new Uint8Array(value), !1)
           : value instanceof Int8Array
@@ -3899,6 +3949,7 @@
         0 === request.pendingDebugChunks
           ? (null !== regularChunks &&
               (regularChunks.close(), (request.debugDestination = null)),
+            cleanupTaintQueue(request),
             request.status < ABORTING &&
               request.cacheController.abort(
                 Error(
@@ -5794,6 +5845,12 @@
       CLOSED = 14,
       PRERENDER = 21,
       NEXT_TWO_CHUNKS_ARE_ATOMIC = Symbol(),
+      TaintRegistryObjects = ReactSharedInternalsServer.TaintRegistryObjects,
+      TaintRegistryValues = ReactSharedInternalsServer.TaintRegistryValues,
+      TaintRegistryByteLengths =
+        ReactSharedInternalsServer.TaintRegistryByteLengths,
+      TaintRegistryPendingRequests =
+        ReactSharedInternalsServer.TaintRegistryPendingRequests,
       currentRequest = null,
       canEmitDebugInfo = !1,
       serializedSize = 0,
@@ -5807,52 +5864,57 @@
       chunkCache = new Map(),
       RESPONSE_SYMBOL = Symbol();
     ReactPromise.prototype = Object.create(Promise.prototype);
-    ReactPromise.prototype.then = function (resolve, reject) {
-      switch (this.status) {
-        case "resolved_model":
-          initializeModelChunk(this);
-      }
-      switch (this.status) {
-        case "fulfilled":
-          if ("function" === typeof resolve) {
-            for (
-              var inspectedValue = this.value,
-                cycleProtection = 0,
-                visited = new Set();
-              inspectedValue instanceof ReactPromise;
+    Object.defineProperty(ReactPromise.prototype, "then", {
+      writable: !0,
+      enumerable: !0,
+      configurable: !0,
+      value: function (resolve, reject) {
+        switch (this.status) {
+          case "resolved_model":
+            initializeModelChunk(this);
+        }
+        switch (this.status) {
+          case "fulfilled":
+            if ("function" === typeof resolve) {
+              for (
+                var inspectedValue = this.value,
+                  cycleProtection = 0,
+                  visited = new Set();
+                inspectedValue instanceof ReactPromise;
 
-            ) {
-              cycleProtection++;
-              if (
-                inspectedValue === this ||
-                visited.has(inspectedValue) ||
-                1e3 < cycleProtection
               ) {
-                "function" === typeof reject &&
-                  reject(Error("Cannot have cyclic thenables."));
-                return;
+                cycleProtection++;
+                if (
+                  inspectedValue === this ||
+                  visited.has(inspectedValue) ||
+                  1e3 < cycleProtection
+                ) {
+                  "function" === typeof reject &&
+                    reject(Error("Cannot have cyclic thenables."));
+                  return;
+                }
+                visited.add(inspectedValue);
+                if ("fulfilled" === inspectedValue.status)
+                  inspectedValue = inspectedValue.value;
+                else break;
               }
-              visited.add(inspectedValue);
-              if ("fulfilled" === inspectedValue.status)
-                inspectedValue = inspectedValue.value;
-              else break;
+              resolve(this.value);
             }
-            resolve(this.value);
-          }
-          break;
-        case "pending":
-        case "blocked":
-          "function" === typeof resolve &&
-            (null === this.value && (this.value = []),
-            this.value.push(resolve));
-          "function" === typeof reject &&
-            (null === this.reason && (this.reason = []),
-            this.reason.push(reject));
-          break;
-        default:
-          "function" === typeof reject && reject(this.reason);
+            break;
+          case "pending":
+          case "blocked":
+            "function" === typeof resolve &&
+              (null === this.value && (this.value = []),
+              this.value.push(resolve));
+            "function" === typeof reject &&
+              (null === this.reason && (this.reason = []),
+              this.reason.push(reject));
+            break;
+          default:
+            "function" === typeof reject && reject(this.reason);
+        }
       }
-    };
+    });
     var ObjectPrototype = Object.prototype,
       ArrayPrototype = Array.prototype,
       initializingHandler = null;
@@ -5871,44 +5933,44 @@
     };
     exports.decodeAction = function (body, serverManifest) {
       var formData = new FormData(),
-        action = null,
-        seenActions = new Set();
+        maybeActionKey = null;
       body.forEach(function (value, key) {
         key.startsWith("$ACTION_")
           ? key.startsWith("$ACTION_REF_")
-            ? seenActions.has(key) ||
-              (seenActions.add(key),
-              (value = "$ACTION_" + key.slice(12) + ":"),
-              (value = decodeBoundActionMetaData(body, serverManifest, value)),
-              (action = loadServerReference(serverManifest, value)))
-            : key.startsWith("$ACTION_ID_") &&
-              !seenActions.has(key) &&
-              (seenActions.add(key),
-              (value = key.slice(11)),
-              (action = loadServerReference(serverManifest, {
-                id: value,
-                bound: null
-              })))
+            ? (maybeActionKey = key)
+            : key.startsWith("$ACTION_ID_") && (maybeActionKey = key)
           : formData.append(key, value);
       });
-      return null === action
-        ? null
-        : action.then(function (fn) {
-            return fn.bind(null, formData);
-          });
+      if (null === maybeActionKey) return null;
+      var actionKey = maybeActionKey,
+        action = null;
+      if (actionKey.startsWith("$ACTION_REF_"))
+        (actionKey = "$ACTION_" + actionKey.slice(12) + ":"),
+          (body = decodeBoundActionMetaData(body, serverManifest, actionKey)),
+          (action = loadServerReference(serverManifest, body));
+      else if (actionKey.startsWith("$ACTION_ID_"))
+        (body = actionKey.slice(11)),
+          (action = loadServerReference(serverManifest, {
+            id: body,
+            bound: null
+          }));
+      else throw Error("Cannot handle action key. This is a bug in React.");
+      return action.then(function (fn) {
+        return fn.bind(null, formData);
+      });
     };
     exports.decodeFormState = function (actionResult, body, serverManifest) {
       var keyPath = body.get("$ACTION_KEY");
       if ("string" !== typeof keyPath) return Promise.resolve(null);
-      var metaData = null;
+      var actionKey = null;
       body.forEach(function (value, key) {
-        key.startsWith("$ACTION_REF_") &&
-          ((value = "$ACTION_" + key.slice(12) + ":"),
-          (metaData = decodeBoundActionMetaData(body, serverManifest, value)));
+        key.startsWith("$ACTION_REF_") && (actionKey = key);
       });
-      if (null === metaData) return Promise.resolve(null);
-      var referenceId = metaData.id;
-      return Promise.resolve(metaData.bound).then(function (bound) {
+      if (null === actionKey) return Promise.resolve(null);
+      var formFieldPrefix = "$ACTION_" + actionKey.slice(12) + ":";
+      body = decodeBoundActionMetaData(body, serverManifest, formFieldPrefix);
+      var referenceId = body.id;
+      return Promise.resolve(body.bound).then(function (bound) {
         return null === bound
           ? null
           : [actionResult, keyPath, referenceId, bound.length - 1];
@@ -5959,7 +6021,7 @@
       function error(reason) {
         reportGlobalError(response$jscomp$0, reason);
         "function" === typeof iterator.throw &&
-          iterator.throw(reason).then(error, error);
+          iterator.throw(reason).then(noop, noop);
       }
       var iterator = iterable[ASYNC_ITERATOR](),
         response$jscomp$0 = createResponse(

@@ -64,13 +64,18 @@
       "default": "./profiling.js"
     },
     "./test-utils": "./test-utils.js",
+    "./unstable_testing": {
+      "react-server": "./unstable_testing.react-server.js",
+      "default": "./unstable_testing.js"
+    },
+    "./unstable_server-external-runtime": "./unstable_server-external-runtime.js",
     "./package.json": "./package.json"
   },
   "dependencies": {
-    "scheduler": "0.28.0-canary-247fbb45-20260622"
+    "scheduler": "https://pkg.csb.dev/MaxwellCohen/react/commit/d0148100/scheduler"
   },
   "peerDependencies": {
-    "react": "19.3.0-canary-247fbb45-20260622"
+    "react": "0.0.0-experimental-d0148100-20260806"
   },
   "browser": {
     "./server.js": "./server.browser.js",

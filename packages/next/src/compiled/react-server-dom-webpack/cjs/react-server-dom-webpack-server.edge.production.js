@@ -10,8 +10,9 @@
 
 "use strict";
 var ReactDOM = require("react-dom"),
-  React = require("react"),
-  REACT_LEGACY_ELEMENT_TYPE = Symbol.for("react.element"),
+  React = require("react");
+function noop() {}
+var REACT_LEGACY_ELEMENT_TYPE = Symbol.for("react.element"),
   REACT_ELEMENT_TYPE = Symbol.for("react.transitional.element"),
   REACT_FRAGMENT_TYPE = Symbol.for("react.fragment"),
   REACT_CONTEXT_TYPE = Symbol.for("react.context"),
@@ -549,7 +550,6 @@ function createTemporaryReference(temporaryReferences, id) {
   temporaryReferences.set(reference, id);
   return reference;
 }
-function noop() {}
 var SuspenseException = Error(
   "Suspense Exception: This is not a real error! It's an implementation detail of `use` to interrupt the current render. You must either rethrow it immediately, or move the `use` call outside of the `try/catch` block. Capturing without rethrowing will lead to unexpected behavior.\n\nTo handle async errors, wrap your component in an error boundary, or call the promise's `.catch` method and pass the result to `use`."
 );
@@ -824,7 +824,29 @@ function describeObjectForErrorMessage(objectOrArray, expandedName) {
 var hasOwnProperty = Object.prototype.hasOwnProperty,
   ObjectPrototype$1 = Object.prototype,
   stringify = JSON.stringify,
-  NEXT_TWO_CHUNKS_ARE_ATOMIC = Symbol();
+  NEXT_TWO_CHUNKS_ARE_ATOMIC = Symbol(),
+  TaintRegistryObjects = ReactSharedInternalsServer.TaintRegistryObjects,
+  TaintRegistryValues = ReactSharedInternalsServer.TaintRegistryValues,
+  TaintRegistryByteLengths =
+    ReactSharedInternalsServer.TaintRegistryByteLengths,
+  TaintRegistryPendingRequests =
+    ReactSharedInternalsServer.TaintRegistryPendingRequests;
+function throwTaintViolation(message) {
+  throw Error(message);
+}
+function cleanupTaintQueue(request) {
+  request = request.taintCleanupQueue;
+  TaintRegistryPendingRequests.delete(request);
+  for (var i = 0; i < request.length; i++) {
+    var entryValue = request[i],
+      entry = TaintRegistryValues.get(entryValue);
+    void 0 !== entry &&
+      (1 === entry.count
+        ? TaintRegistryValues.delete(entryValue)
+        : entry.count--);
+  }
+  request.length = 0;
+}
 function defaultErrorHandler(error) {
   console.error(error);
 }
@@ -846,7 +868,9 @@ function RequestInstance(
   ReactSharedInternalsServer.A = DefaultAsyncDispatcher;
   var abortSet = new Set(),
     pingedTasks = [],
-    hints = new Set();
+    cleanupQueue = [];
+  TaintRegistryPendingRequests.add(cleanupQueue);
+  var hints = new Set();
   this.type = type;
   this.status = 10;
   this.flushScheduled = !1;
@@ -869,7 +893,7 @@ function RequestInstance(
   this.temporaryReferences = temporaryReferences;
   this.identifierPrefix = identifierPrefix || "";
   this.identifierCount = 1;
-  this.taintCleanupQueue = [];
+  this.taintCleanupQueue = cleanupQueue;
   this.onError = void 0 === onError ? defaultErrorHandler : onError;
   this.onAllReady = onAllReady;
   this.onFatalError = onFatalError;
@@ -1066,7 +1090,7 @@ function serializeAsyncIterable(request, task, iterable, iterator) {
       erroredTask(request, streamTask, reason),
       enqueueFlush(request),
       "function" === typeof iterator.throw &&
-        iterator.throw(reason).then(error, error));
+        iterator.throw(reason).then(noop, noop));
   }
   function abortIterable() {
     if (0 === streamTask.status) {
@@ -1080,7 +1104,7 @@ function serializeAsyncIterable(request, task, iterable, iterator) {
         : (erroredTask(request, streamTask, signal.reason),
           enqueueFlush(request));
       "function" === typeof iterator.throw &&
-        iterator.throw(reason).then(error, error);
+        iterator.throw(reason).then(noop, noop);
     }
   }
   iterable = iterable === iterator;
@@ -1594,7 +1618,7 @@ function renderModelDestructive(
         if (3200 < serializedSize) return deferTask(request, task);
         parentPropertyName = value.props;
         parent = parentPropertyName.ref;
-        request = renderElement(
+        value = renderElement(
           request,
           task,
           value.type,
@@ -1602,12 +1626,12 @@ function renderModelDestructive(
           void 0 !== parent ? parent : null,
           parentPropertyName
         );
-        "object" === typeof request &&
-          null !== request &&
+        "object" === typeof value &&
+          null !== value &&
           null !== elementReference &&
-          (writtenObjects.has(request) ||
-            writtenObjects.set(request, elementReference));
-        return request;
+          (writtenObjects.has(value) ||
+            writtenObjects.set(value, elementReference));
+        return value;
       case REACT_LAZY_TYPE:
         if (3200 < serializedSize) return deferTask(request, task);
         task.thenableState = null;
@@ -1639,6 +1663,8 @@ function renderModelDestructive(
       void 0 !== elementReference)
     )
       return "$T" + elementReference;
+    elementReference = TaintRegistryObjects.get(value);
+    void 0 !== elementReference && throwTaintViolation(elementReference);
     elementReference = request.writtenObjects;
     writtenObjects = elementReference.get(value);
     if ("function" === typeof value.then) {
@@ -1740,21 +1766,21 @@ function renderModelDestructive(
     if ("function" === typeof elementReference)
       return (
         null !== task.keyPath
-          ? ((request = [
+          ? ((value = [
               REACT_ELEMENT_TYPE,
               REACT_FRAGMENT_TYPE,
               task.keyPath,
               { children: value }
             ]),
-            (request = task.implicitSlot ? [request] : request))
+            (value = task.implicitSlot ? [value] : value))
           : ((parentPropertyName = elementReference.call(value)),
-            (request = serializeAsyncIterable(
+            (value = serializeAsyncIterable(
               request,
               task,
               value,
               parentPropertyName
             ))),
-        request
+        value
       );
     if (value instanceof Date) return "$D" + value.toJSON();
     request = getPrototypeOf(value);
@@ -1769,6 +1795,8 @@ function renderModelDestructive(
     return value;
   }
   if ("string" === typeof value) {
+    task = TaintRegistryValues.get(value);
+    void 0 !== task && throwTaintViolation(task.message);
     serializedSize += value.length;
     if (
       "Z" === value[value.length - 1] &&
@@ -1778,12 +1806,12 @@ function renderModelDestructive(
     if (1024 <= value.length && null !== byteLengthOfChunk)
       return (
         request.pendingChunks++,
-        (task = request.nextChunkId++),
-        emitTextChunk(request, task, value, !1),
-        serializeByValueID(task)
+        (parentPropertyName = request.nextChunkId++),
+        emitTextChunk(request, parentPropertyName, value, !1),
+        serializeByValueID(parentPropertyName)
       );
-    request = "$" === value[0] ? "$" + value : value;
-    return request;
+    value = "$" === value[0] ? "$" + value : value;
+    return value;
   }
   if ("boolean" === typeof value) return value;
   if ("number" === typeof value)
@@ -1807,29 +1835,28 @@ function renderModelDestructive(
       );
     if (value.$$typeof === SERVER_REFERENCE_TAG)
       return (
-        (task = request.writtenServerReferences),
-        (parentPropertyName = task.get(value)),
-        void 0 !== parentPropertyName
-          ? (request = "$h" + parentPropertyName.toString(16))
-          : ((parentPropertyName = value.$$bound),
-            (parentPropertyName =
-              null === parentPropertyName
-                ? null
-                : Promise.resolve(parentPropertyName)),
+        (parentPropertyName = request.writtenServerReferences),
+        (parent = parentPropertyName.get(value)),
+        void 0 !== parent
+          ? (value = "$h" + parent.toString(16))
+          : ((parent = value.$$bound),
+            (parent = null === parent ? null : Promise.resolve(parent)),
             (request = outlineModelWithFormatContext(
               request,
-              { id: value.$$id, bound: parentPropertyName },
+              { id: value.$$id, bound: parent },
               0
             )),
-            task.set(value, request),
-            (request = "$h" + request.toString(16))),
-        request
+            parentPropertyName.set(value, request),
+            (value = "$h" + request.toString(16))),
+        value
       );
     if (
       void 0 !== request.temporaryReferences &&
       ((request = request.temporaryReferences.get(value)), void 0 !== request)
     )
       return "$T" + request;
+    request = TaintRegistryObjects.get(value);
+    void 0 !== request && throwTaintViolation(request);
     if (value.$$typeof === TEMPORARY_REFERENCE_TAG)
       throw Error(
         "Could not reference an opaque temporary reference. This is likely due to misconfiguring the temporaryReferences options on the server."
@@ -1868,7 +1895,12 @@ function renderModelDestructive(
     task.set(value, parentPropertyName);
     return serializeByValueID(parentPropertyName);
   }
-  if ("bigint" === typeof value) return "$n" + value.toString(10);
+  if ("bigint" === typeof value)
+    return (
+      (request = TaintRegistryValues.get(value)),
+      void 0 !== request && throwTaintViolation(request.message),
+      "$n" + value.toString(10)
+    );
   throw Error(
     "Type " +
       typeof value +
@@ -1898,6 +1930,7 @@ function logRecoverableError(request, error) {
 function fatalError(request, error) {
   var onFatalError = request.onFatalError;
   onFatalError(error);
+  cleanupTaintQueue(request);
   null !== request.destination
     ? ((request.status = 14), closeWithError(request.destination, error))
     : ((request.status = 13), (request.fatalError = error));
@@ -1917,6 +1950,19 @@ function emitModelChunk(request, id, json) {
   request.completedRegularChunks.push(id);
 }
 function emitTypedArrayChunk(request, id, tag, typedArray, debug) {
+  if (TaintRegistryByteLengths.has(typedArray.byteLength)) {
+    var tainted = TaintRegistryValues.get(
+      String.fromCharCode.apply(
+        String,
+        new Uint8Array(
+          typedArray.buffer,
+          typedArray.byteOffset,
+          typedArray.byteLength
+        )
+      )
+    );
+    void 0 !== tainted && throwTaintViolation(tainted.message);
+  }
   debug ? request.pendingDebugChunks++ : request.pendingChunks++;
   typedArray = new Uint8Array(
     typedArray.buffer,
@@ -1947,7 +1993,9 @@ function emitTextChunk(request, id, text, debug) {
 function emitChunk(request, task, value) {
   var id = task.id;
   "string" === typeof value && null !== byteLengthOfChunk
-    ? emitTextChunk(request, id, value, !1)
+    ? ((task = TaintRegistryValues.get(value)),
+      void 0 !== task && throwTaintViolation(task.message),
+      emitTextChunk(request, id, value, !1))
     : value instanceof ArrayBuffer
       ? emitTypedArrayChunk(request, id, "A", new Uint8Array(value), !1)
       : value instanceof Int8Array
@@ -2153,7 +2201,8 @@ function flushCompletedChunks(request) {
     }
   }
   0 === request.pendingChunks &&
-    (12 > request.status &&
+    (cleanupTaintQueue(request),
+    12 > request.status &&
       request.cacheController.abort(
         Error(
           "This render completed successfully. All cacheSignals are now aborted to allow clean up of any unused resources."
@@ -2271,9 +2320,9 @@ function abort(request, reason) {
         onAllReady();
         flushCompletedChunks(request);
       }
-    } catch (error$26) {
-      logRecoverableError(request, error$26, null),
-        fatalError(request, error$26);
+    } catch (error$29) {
+      logRecoverableError(request, error$29, null),
+        fatalError(request, error$29);
     }
 }
 function resolveServerReference(bundlerConfig, id) {
@@ -2364,50 +2413,56 @@ function ReactPromise(status, value, reason) {
   this.reason = reason;
 }
 ReactPromise.prototype = Object.create(Promise.prototype);
-ReactPromise.prototype.then = function (resolve, reject) {
-  switch (this.status) {
-    case "resolved_model":
-      initializeModelChunk(this);
-  }
-  switch (this.status) {
-    case "fulfilled":
-      if ("function" === typeof resolve) {
-        for (
-          var inspectedValue = this.value,
-            cycleProtection = 0,
-            visited = new Set();
-          inspectedValue instanceof ReactPromise;
+Object.defineProperty(ReactPromise.prototype, "then", {
+  writable: !0,
+  enumerable: !0,
+  configurable: !0,
+  value: function (resolve, reject) {
+    switch (this.status) {
+      case "resolved_model":
+        initializeModelChunk(this);
+    }
+    switch (this.status) {
+      case "fulfilled":
+        if ("function" === typeof resolve) {
+          for (
+            var inspectedValue = this.value,
+              cycleProtection = 0,
+              visited = new Set();
+            inspectedValue instanceof ReactPromise;
 
-        ) {
-          cycleProtection++;
-          if (
-            inspectedValue === this ||
-            visited.has(inspectedValue) ||
-            1e3 < cycleProtection
           ) {
-            "function" === typeof reject &&
-              reject(Error("Cannot have cyclic thenables."));
-            return;
+            cycleProtection++;
+            if (
+              inspectedValue === this ||
+              visited.has(inspectedValue) ||
+              1e3 < cycleProtection
+            ) {
+              "function" === typeof reject &&
+                reject(Error("Cannot have cyclic thenables."));
+              return;
+            }
+            visited.add(inspectedValue);
+            if ("fulfilled" === inspectedValue.status)
+              inspectedValue = inspectedValue.value;
+            else break;
           }
-          visited.add(inspectedValue);
-          if ("fulfilled" === inspectedValue.status)
-            inspectedValue = inspectedValue.value;
-          else break;
+          resolve(this.value);
         }
-        resolve(this.value);
-      }
-      break;
-    case "pending":
-    case "blocked":
-      "function" === typeof resolve &&
-        (null === this.value && (this.value = []), this.value.push(resolve));
-      "function" === typeof reject &&
-        (null === this.reason && (this.reason = []), this.reason.push(reject));
-      break;
-    default:
-      "function" === typeof reject && reject(this.reason);
+        break;
+      case "pending":
+      case "blocked":
+        "function" === typeof resolve &&
+          (null === this.value && (this.value = []), this.value.push(resolve));
+        "function" === typeof reject &&
+          (null === this.reason && (this.reason = []),
+          this.reason.push(reject));
+        break;
+      default:
+        "function" === typeof reject && reject(this.reason);
+    }
   }
-};
+});
 var ObjectPrototype = Object.prototype,
   ArrayPrototype = Array.prototype;
 function wakeChunk(response, listeners, value, chunk) {
@@ -3050,12 +3105,12 @@ function parseReadableStream(response, reference, type) {
               (previousBlockedChunk = chunk));
         } else {
           chunk = previousBlockedChunk;
-          var chunk$31 = new ReactPromise("pending", null, null);
-          chunk$31.then(enqueue, flightController.error);
-          previousBlockedChunk = chunk$31;
+          var chunk$34 = new ReactPromise("pending", null, null);
+          chunk$34.then(enqueue, flightController.error);
+          previousBlockedChunk = chunk$34;
           chunk.then(function () {
-            previousBlockedChunk === chunk$31 && (previousBlockedChunk = null);
-            resolveModelChunk(response, chunk$31, json, -1);
+            previousBlockedChunk === chunk$34 && (previousBlockedChunk = null);
+            resolveModelChunk(response, chunk$34, json, -1);
           });
         }
       },
@@ -3504,44 +3559,41 @@ exports.createTemporaryReferenceSet = function () {
 };
 exports.decodeAction = function (body, serverManifest) {
   var formData = new FormData(),
-    action = null,
-    seenActions = new Set();
+    maybeActionKey = null;
   body.forEach(function (value, key) {
     key.startsWith("$ACTION_")
       ? key.startsWith("$ACTION_REF_")
-        ? seenActions.has(key) ||
-          (seenActions.add(key),
-          (value = "$ACTION_" + key.slice(12) + ":"),
-          (value = decodeBoundActionMetaData(body, serverManifest, value)),
-          (action = loadServerReference(serverManifest, value)))
-        : key.startsWith("$ACTION_ID_") &&
-          !seenActions.has(key) &&
-          (seenActions.add(key),
-          (value = key.slice(11)),
-          (action = loadServerReference(serverManifest, {
-            id: value,
-            bound: null
-          })))
+        ? (maybeActionKey = key)
+        : key.startsWith("$ACTION_ID_") && (maybeActionKey = key)
       : formData.append(key, value);
   });
-  return null === action
-    ? null
-    : action.then(function (fn) {
-        return fn.bind(null, formData);
-      });
+  if (null === maybeActionKey) return null;
+  var actionKey = maybeActionKey,
+    action = null;
+  if (actionKey.startsWith("$ACTION_REF_"))
+    (actionKey = "$ACTION_" + actionKey.slice(12) + ":"),
+      (body = decodeBoundActionMetaData(body, serverManifest, actionKey)),
+      (action = loadServerReference(serverManifest, body));
+  else if (actionKey.startsWith("$ACTION_ID_"))
+    (body = actionKey.slice(11)),
+      (action = loadServerReference(serverManifest, { id: body, bound: null }));
+  else throw Error("Cannot handle action key. This is a bug in React.");
+  return action.then(function (fn) {
+    return fn.bind(null, formData);
+  });
 };
 exports.decodeFormState = function (actionResult, body, serverManifest) {
   var keyPath = body.get("$ACTION_KEY");
   if ("string" !== typeof keyPath) return Promise.resolve(null);
-  var metaData = null;
+  var actionKey = null;
   body.forEach(function (value, key) {
-    key.startsWith("$ACTION_REF_") &&
-      ((value = "$ACTION_" + key.slice(12) + ":"),
-      (metaData = decodeBoundActionMetaData(body, serverManifest, value)));
+    key.startsWith("$ACTION_REF_") && (actionKey = key);
   });
-  if (null === metaData) return Promise.resolve(null);
-  var referenceId = metaData.id;
-  return Promise.resolve(metaData.bound).then(function (bound) {
+  if (null === actionKey) return Promise.resolve(null);
+  var formFieldPrefix = "$ACTION_" + actionKey.slice(12) + ":";
+  body = decodeBoundActionMetaData(body, serverManifest, formFieldPrefix);
+  var referenceId = body.id;
+  return Promise.resolve(body.bound).then(function (bound) {
     return null === bound
       ? null
       : [actionResult, keyPath, referenceId, bound.length - 1];
@@ -3591,7 +3643,7 @@ exports.decodeReplyFromAsyncIterable = function (
   function error(reason) {
     reportGlobalError(response, reason);
     "function" === typeof iterator.throw &&
-      iterator.throw(reason).then(error, error);
+      iterator.throw(reason).then(noop, noop);
   }
   var iterator = iterable[ASYNC_ITERATOR](),
     response = createResponse(
