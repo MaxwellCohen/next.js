@@ -358,9 +358,36 @@
       root,
       formFieldPrefix,
       temporaryReferences,
-      resolve,
-      reject
+      onResolve,
+      onReject,
+      signal
     ) {
+      function endReplyLifetime() {
+        null !== replyLifetimeController &&
+          replyLifetimeController.abort("The reply ended.");
+      }
+      function resolve(value) {
+        settled = !0;
+        endReplyLifetime();
+        onResolve(value);
+      }
+      function reject(error) {
+        settled = !0;
+        endReplyLifetime();
+        onReject(error);
+      }
+      function attachAbortSignal(abortSignal) {
+        abortSignal.aborted
+          ? abort()
+          : ((replyLifetimeController = new AbortController()),
+            abortSignal.addEventListener(
+              "abort",
+              function () {
+                abort();
+              },
+              { signal: replyLifetimeController.signal }
+            ));
+      }
       function serializeTypedArray(tag, typedArray) {
         typedArray = new Blob([
           new Uint8Array(
@@ -769,22 +796,26 @@
         modelRoot = model;
         return JSON.stringify(model, resolveToJSON);
       }
+      function abort() {
+        endReplyLifetime();
+        0 < pendingParts &&
+          ((pendingParts = 0),
+          null === formData ? resolve(json) : resolve(formData));
+      }
       var nextPartId = 1,
         pendingParts = 0,
         formData = null,
         writtenObjects = new WeakMap(),
-        modelRoot = root;
+        modelRoot = root,
+        settled = !1,
+        replyLifetimeController = null;
       checkEvalAvailabilityOnceDev();
       var json = serializeModel(root, 0);
       null === formData
         ? resolve(json)
         : (formData.set(formFieldPrefix + "0", json),
           0 === pendingParts && resolve(formData));
-      return function () {
-        0 < pendingParts &&
-          ((pendingParts = 0),
-          null === formData ? resolve(json) : resolve(formData));
-      };
+      void 0 === signal || settled || attachAbortSignal(signal);
     }
     function encodeFormData(reference) {
       var resolve,
@@ -2114,9 +2145,11 @@
         response._chunks.forEach(function (chunk) {
           "pending" === chunk.status
             ? triggerErrorOnChunk(response, chunk, error)
-            : "fulfilled" === chunk.status &&
-              null !== chunk.reason &&
-              chunk.reason.error(error);
+            : "pending_weak" === chunk.status
+              ? haltChunk(response, chunk)
+              : "fulfilled" === chunk.status &&
+                null !== chunk.reason &&
+                chunk.reason.error(error);
         });
         weakResponse = response._debugChannel;
         void 0 !== weakResponse &&
@@ -2228,6 +2261,16 @@
             ? new ReactPromise("halted", null, null)
             : new ReactPromise("rejected", null, response._closedReason)
           : createPendingChunk(response)),
+        chunks.set(id, chunk));
+      return chunk;
+    }
+    function getWeakChunk(response, id) {
+      var chunks = response._chunks,
+        chunk = chunks.get(id);
+      chunk ||
+        ((chunk = response._closed
+          ? new ReactPromise("halted", null, null)
+          : new ReactPromise("pending_weak", null, null)),
         chunks.set(id, chunk));
       return chunk;
     }
@@ -2585,22 +2628,25 @@
       }
     }
     function getOutlinedModel(response, reference, parentObject, key, map) {
-      var path = reference.split(":");
-      reference = parseInt(path[0], 16);
-      reference = getChunk(response, reference);
+      var id = parseInt(reference, 16);
+      reference =
+        -1 === reference.indexOf(":")
+          ? EMPTY_REFERENCE_PATH
+          : reference.split(":");
+      id = getChunk(response, id);
       null !== initializingChunk &&
         isArrayImpl(initializingChunk._children) &&
-        initializingChunk._children.push(reference);
-      switch (reference.status) {
+        initializingChunk._children.push(id);
+      switch (id.status) {
         case "resolved_model":
-          initializeModelChunk(reference);
+          initializeModelChunk(id);
           break;
         case "resolved_module":
-          initializeModuleChunk(reference);
+          initializeModuleChunk(id);
       }
-      switch (reference.status) {
+      switch (id.status) {
         case "fulfilled":
-          for (var value = reference.value, i = 1; i < path.length; i++) {
+          for (var value = id.value, i = 1; i < reference.length; i++) {
             for (
               ;
               "object" === typeof value &&
@@ -2629,7 +2675,7 @@
                     key,
                     response,
                     map,
-                    path.slice(i - 1),
+                    reference.slice(i - 1),
                     isInitializingDebugInfo
                   );
                 case "halted":
@@ -2665,7 +2711,7 @@
                   );
               }
             }
-            var name = path[i];
+            var name = reference[i];
             if (
               "object" !== typeof value ||
               null === value ||
@@ -2683,17 +2729,17 @@
             value.$$typeof === REACT_LAZY_TYPE;
 
           ) {
-            path = value._payload;
-            switch (path.status) {
+            reference = value._payload;
+            switch (reference.status) {
               case "resolved_model":
-                initializeModelChunk(path);
+                initializeModelChunk(reference);
                 break;
               case "resolved_module":
-                initializeModuleChunk(path);
+                initializeModuleChunk(reference);
             }
-            switch (path.status) {
+            switch (reference.status) {
               case "fulfilled":
-                value = path.value;
+                value = reference.value;
                 continue;
             }
             break;
@@ -2704,18 +2750,18 @@
             ("4" !== key && "5" !== key)
           )
             isInitializingDebugInfo ||
-              transferReferencedDebugInfo(initializingChunk, reference);
+              transferReferencedDebugInfo(initializingChunk, id);
           return response;
         case "pending":
         case "pending_weak":
         case "blocked":
           return waitForReference(
-            reference,
+            id,
             parentObject,
             key,
             response,
             map,
-            path,
+            reference,
             isInitializingDebugInfo
           );
         case "halted":
@@ -2737,12 +2783,12 @@
             initializingHandler
               ? ((initializingHandler.errored = !0),
                 (initializingHandler.value = null),
-                (initializingHandler.reason = reference.reason))
+                (initializingHandler.reason = id.reason))
               : (initializingHandler = {
                   parent: null,
                   chunk: null,
                   value: null,
-                  reason: reference.reason,
+                  reason: id.reason,
                   deps: 0,
                   errored: !0
                 }),
@@ -2862,7 +2908,14 @@
               response
             );
           case "w":
-            return;
+            return (
+              (parentObject = parseInt(value.slice(2), 16)),
+              (response = getWeakChunk(response, parentObject)),
+              null !== initializingChunk &&
+                isArrayImpl(initializingChunk._children) &&
+                initializingChunk._children.push(response),
+              response
+            );
           case "S":
             return Symbol.for(value.slice(2));
           case "h":
@@ -3197,15 +3250,25 @@
     }
     function resolveModule(response, id, model, streamState) {
       var chunks = response._chunks,
-        chunk = chunks.get(id);
-      model = parseModel(response, model);
+        chunk = chunks.get(id),
+        prevHandler = initializingHandler;
+      initializingHandler = null;
+      try {
+        var clientReferenceMetadata = parseModel(response, model);
+        if (null !== initializingHandler)
+          throw Error(
+            "A client reference was blocked on a row that has not been received yet. This is a bug in React."
+          );
+      } finally {
+        initializingHandler = prevHandler;
+      }
       var clientReference = resolveClientReference(
         response._bundlerConfig,
-        model
+        clientReferenceMetadata
       );
       prepareDestinationWithChunks(
         response._moduleLoading,
-        model[1],
+        clientReferenceMetadata[1],
         response._nonce
       );
       if ((model = preloadModule(clientReference))) {
@@ -5004,7 +5067,7 @@
         response._allowPartialStream
           ? ((response._closed = !0),
             response._chunks.forEach(function (chunk) {
-              "pending" === chunk.status
+              "pending" === chunk.status || "pending_weak" === chunk.status
                 ? haltChunk(response, chunk)
                 : "fulfilled" === chunk.status &&
                   null !== chunk.reason &&
@@ -5287,6 +5350,7 @@
       initializingHandler = null,
       initializingChunk = null,
       isInitializingDebugInfo = !1,
+      EMPTY_REFERENCE_PATH = [],
       mightHaveStaticConstructor = /\bclass\b.*\bstatic\b/,
       MIN_CHUNK_SIZE = 65536,
       supportsCreateTask = !!console.createTask,
@@ -5489,26 +5553,16 @@
     };
     exports.encodeReply = function (value, options) {
       return new Promise(function (resolve, reject) {
-        var abort = processReply(
+        processReply(
           value,
           "",
           options && options.temporaryReferences
             ? options.temporaryReferences
             : void 0,
           resolve,
-          reject
+          reject,
+          options ? options.signal : void 0
         );
-        if (options && options.signal) {
-          var signal = options.signal;
-          if (signal.aborted) abort(signal.reason);
-          else {
-            var listener = function () {
-              abort(signal.reason);
-              signal.removeEventListener("abort", listener);
-            };
-            signal.addEventListener("abort", listener);
-          }
-        }
       });
     };
     exports.registerServerReference = function (

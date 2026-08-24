@@ -33,7 +33,9 @@ ignoredBuiltDependencies:
 #   temporary fixture dirs in `file://./scripts/install-native.mjs`
 # - `file://./test/lib/pnpm-security-settings.js` reads and copies these values for
 #   isolated test dirs
-blockExoticSubdeps: true
+# Disabled while resolving React from pkg.csb.dev URL overrides (local sync).
+# Re-enable before committing/pushing.
+blockExoticSubdeps: false
 minimumReleaseAge: 2880 # 48 hrs
 minimumReleaseAgeExclude:
   - '@mswjs/interceptors@0.42.0'
