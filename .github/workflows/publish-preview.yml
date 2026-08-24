@@ -1,0 +1,73 @@
+# Publishes a JS-only Next.js preview tarball to pkg.pr.new.
+# Does not rebuild native SWC; apps download official `@next/swc-*`
+# binaries matching packages/next/package.json's version.
+name: Publish preview Next.js
+
+on:
+  pull_request:
+  push:
+    branches: [canary]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  publish:
+    name: Publish next
+    if: github.repository == 'MaxwellCohen/next.js'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      NEXT_TELEMETRY_DISABLED: 1
+      NEXT_SKIP_NATIVE_POSTINSTALL: '1'
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version-file: .node-version
+          check-latest: true
+          package-manager-cache: false
+
+      - name: Setup corepack
+        run: |
+          npm i -g corepack@0.31
+          corepack enable
+
+      - id: get-store-path
+        run: echo STORE_PATH=$(pnpm store path) >> $GITHUB_OUTPUT
+
+      - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        timeout-minutes: 5
+        with:
+          path: ${{ steps.get-store-path.outputs.STORE_PATH }}
+          key: pnpm-store-preview-${{ hashFiles('**/pnpm-lock.yaml') }}
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Vendor React
+        run: pnpm --filter=next exec taskr copy_vendor_react
+
+      # Use turbo so workspace deps (^build) like @next/polyfill-* are built
+      # before packages/next. Plain `taskr release` fails without those dist files.
+      - name: Build Next.js
+        run: pnpm build --filter=next
+
+      - name: Attach published SWC optional dependencies
+        run: node scripts/attach-published-swc-optional-deps.js
+
+      - name: Publish to pkg.pr.new
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: pnpm exec pkg-pr-new publish --pnpm --no-compact './packages/next'
