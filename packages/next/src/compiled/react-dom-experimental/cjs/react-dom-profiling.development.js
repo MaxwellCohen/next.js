@@ -25783,6 +25783,9 @@
         ? count
         : 5;
     }
+    function isSuspensePendingStartData(data) {
+      return 36 === data.charCodeAt(0) && 63 === data.charCodeAt(1);
+    }
     function getOwnerDocumentFromRootContainer(rootContainerElement) {
       return 9 === rootContainerElement.nodeType
         ? rootContainerElement
@@ -26063,7 +26066,7 @@
             depth--;
           } else if (
             node === SUSPENSE_START_DATA ||
-            node === SUSPENSE_PENDING_START_DATA ||
+            isSuspensePendingStartData(node) ||
             node === SUSPENSE_QUEUED_START_DATA ||
             node === SUSPENSE_FALLBACK_START_DATA ||
             node === ACTIVITY_START_DATA
@@ -26117,10 +26120,10 @@
             if (0 === suspenseInstance) break;
             else suspenseInstance--;
           else
-            (node !== SUSPENSE_START_DATA &&
-              node !== SUSPENSE_PENDING_START_DATA &&
-              node !== SUSPENSE_QUEUED_START_DATA &&
-              node !== SUSPENSE_FALLBACK_START_DATA) ||
+            (node === SUSPENSE_START_DATA ||
+              isSuspensePendingStartData(node) ||
+              node === SUSPENSE_QUEUED_START_DATA ||
+              node === SUSPENSE_FALLBACK_START_DATA) &&
               suspenseInstance++;
         node = nextNode;
       } while (node);
@@ -27230,14 +27233,14 @@
     }
     function isSuspenseInstancePending(instance) {
       return (
-        instance.data === SUSPENSE_PENDING_START_DATA ||
+        isSuspensePendingStartData(instance.data) ||
         instance.data === SUSPENSE_QUEUED_START_DATA
       );
     }
     function isSuspenseInstanceFallback(instance) {
       return (
         instance.data === SUSPENSE_FALLBACK_START_DATA ||
-        (instance.data === SUSPENSE_PENDING_START_DATA &&
+        (isSuspensePendingStartData(instance.data) &&
           instance.ownerDocument.readyState !== DOCUMENT_READY_STATE_LOADING)
       );
     }
@@ -27246,18 +27249,16 @@
       if (instance.data === SUSPENSE_QUEUED_START_DATA)
         instance._reactRetry = callback;
       else if (
-        instance.data !== SUSPENSE_PENDING_START_DATA ||
-        ownerDocument.readyState !== DOCUMENT_READY_STATE_LOADING
-      )
-        callback();
-      else {
+        isSuspensePendingStartData(instance.data) &&
+        ownerDocument.readyState === DOCUMENT_READY_STATE_LOADING
+      ) {
         var listener = function () {
           callback();
           ownerDocument.removeEventListener("DOMContentLoaded", listener);
         };
         ownerDocument.addEventListener("DOMContentLoaded", listener);
         instance._reactRetry = listener;
-      }
+      } else callback();
     }
     function getNextHydratable(node) {
       for (; null != node; node = node.nextSibling) {
@@ -27268,7 +27269,7 @@
           if (
             nodeType === SUSPENSE_START_DATA ||
             nodeType === SUSPENSE_FALLBACK_START_DATA ||
-            nodeType === SUSPENSE_PENDING_START_DATA ||
+            isSuspensePendingStartData(nodeType) ||
             nodeType === SUSPENSE_QUEUED_START_DATA ||
             nodeType === ACTIVITY_START_DATA ||
             nodeType === FORM_STATE_IS_MATCHING ||
@@ -27331,11 +27332,11 @@
               return getNextHydratable(hydrationInstance.nextSibling);
             depth--;
           } else
-            (data !== SUSPENSE_START_DATA &&
-              data !== SUSPENSE_FALLBACK_START_DATA &&
-              data !== SUSPENSE_PENDING_START_DATA &&
-              data !== SUSPENSE_QUEUED_START_DATA &&
-              data !== ACTIVITY_START_DATA) ||
+            (data === SUSPENSE_START_DATA ||
+              data === SUSPENSE_FALLBACK_START_DATA ||
+              isSuspensePendingStartData(data) ||
+              data === SUSPENSE_QUEUED_START_DATA ||
+              data === ACTIVITY_START_DATA) &&
               depth++;
         }
         hydrationInstance = hydrationInstance.nextSibling;
@@ -27350,7 +27351,7 @@
           if (
             data === SUSPENSE_START_DATA ||
             data === SUSPENSE_FALLBACK_START_DATA ||
-            data === SUSPENSE_PENDING_START_DATA ||
+            isSuspensePendingStartData(data) ||
             data === SUSPENSE_QUEUED_START_DATA ||
             data === ACTIVITY_START_DATA
           ) {
@@ -32554,7 +32555,6 @@
       ACTIVITY_END_DATA = "/&",
       SUSPENSE_START_DATA = "$",
       SUSPENSE_END_DATA = "/$",
-      SUSPENSE_PENDING_START_DATA = "$?",
       SUSPENSE_QUEUED_START_DATA = "$~",
       SUSPENSE_FALLBACK_START_DATA = "$!",
       PREAMBLE_CONTRIBUTION_HTML = "html",
@@ -33426,11 +33426,11 @@
     };
     (function () {
       var isomorphicReactPackageVersion = React.version;
-      if ("19.3.0-experimental-eafeac09-20260819" !== isomorphicReactPackageVersion)
+      if ("19.3.0-experimental-7d0495dd-20260824" !== isomorphicReactPackageVersion)
         throw Error(
           'Incompatible React versions: The "react" and "react-dom" packages must have the exact same version. Instead got:\n  - react:      ' +
             (isomorphicReactPackageVersion +
-              "\n  - react-dom:  19.3.0-experimental-eafeac09-20260819\nLearn more: https://react.dev/warnings/version-mismatch")
+              "\n  - react-dom:  19.3.0-experimental-7d0495dd-20260824\nLearn more: https://react.dev/warnings/version-mismatch")
         );
     })();
     ("function" === typeof Map &&
@@ -33467,10 +33467,10 @@
       !(function () {
         var internals = {
           bundleType: 1,
-          version: "19.3.0-experimental-eafeac09-20260819",
+          version: "19.3.0-experimental-7d0495dd-20260824",
           rendererPackageName: "react-dom",
           currentDispatcherRef: ReactSharedInternals,
-          reconcilerVersion: "19.3.0-experimental-eafeac09-20260819"
+          reconcilerVersion: "19.3.0-experimental-7d0495dd-20260824"
         };
         internals.overrideHookState = overrideHookState;
         internals.overrideHookStateDeletePath = overrideHookStateDeletePath;
@@ -33960,7 +33960,7 @@
     exports.useFormStatus = function () {
       return resolveDispatcher().useHostTransitionStatus();
     };
-    exports.version = "19.3.0-experimental-eafeac09-20260819";
+    exports.version = "19.3.0-experimental-7d0495dd-20260824";
     "undefined" !== typeof __REACT_DEVTOOLS_GLOBAL_HOOK__ &&
       "function" ===
         typeof __REACT_DEVTOOLS_GLOBAL_HOOK__.registerInternalModuleStop &&
