@@ -850,7 +850,29 @@ function describeObjectForErrorMessage(objectOrArray, expandedName) {
 var hasOwnProperty = Object.prototype.hasOwnProperty,
   ObjectPrototype$1 = Object.prototype,
   stringify = JSON.stringify,
-  NEXT_TWO_CHUNKS_ARE_ATOMIC = Symbol();
+  NEXT_TWO_CHUNKS_ARE_ATOMIC = Symbol(),
+  TaintRegistryObjects = ReactSharedInternalsServer.TaintRegistryObjects,
+  TaintRegistryValues = ReactSharedInternalsServer.TaintRegistryValues,
+  TaintRegistryByteLengths =
+    ReactSharedInternalsServer.TaintRegistryByteLengths,
+  TaintRegistryPendingRequests =
+    ReactSharedInternalsServer.TaintRegistryPendingRequests;
+function throwTaintViolation(message) {
+  throw Error(message);
+}
+function cleanupTaintQueue(request) {
+  request = request.taintCleanupQueue;
+  TaintRegistryPendingRequests.delete(request);
+  for (var i = 0; i < request.length; i++) {
+    var entryValue = request[i],
+      entry = TaintRegistryValues.get(entryValue);
+    void 0 !== entry &&
+      (1 === entry.count
+        ? TaintRegistryValues.delete(entryValue)
+        : entry.count--);
+  }
+  request.length = 0;
+}
 function defaultErrorHandler(error) {
   console.error(error);
 }
@@ -872,7 +894,9 @@ function RequestInstance(
   ReactSharedInternalsServer.A = DefaultAsyncDispatcher;
   var abortSet = new Set(),
     pingedTasks = [],
-    hints = new Set();
+    cleanupQueue = [];
+  TaintRegistryPendingRequests.add(cleanupQueue);
+  var hints = new Set();
   this.type = type;
   this.status = 10;
   this.flushScheduled = !1;
@@ -892,10 +916,12 @@ function RequestInstance(
   this.writtenClientReferences = new Map();
   this.writtenServerReferences = new Map();
   this.writtenObjects = new WeakMap();
+  this.writtenImportStrings = new Map();
+  this.writtenImportStringsSize = 0;
   this.temporaryReferences = temporaryReferences;
   this.identifierPrefix = identifierPrefix || "";
   this.identifierCount = 1;
-  this.taintCleanupQueue = [];
+  this.taintCleanupQueue = cleanupQueue;
   this.onError = void 0 === onError ? defaultErrorHandler : onError;
   this.onAllReady = onAllReady;
   this.onFatalError = onFatalError;
@@ -937,6 +963,46 @@ function serializeThenable(request, task, thenable) {
         erroredTask(request, task, thenable.reason),
         task.id
       );
+    case "pending_weak":
+      var id = request.nextChunkId++,
+        keyPath = task.keyPath,
+        implicitSlot = task.implicitSlot,
+        formatContext = task.formatContext,
+        settled = !1;
+      thenable.then(
+        function (value) {
+          settled ||
+            11 < request.status ||
+            ((settled = !0),
+            (value = createTaskWithID(
+              request,
+              id,
+              value,
+              keyPath,
+              implicitSlot,
+              formatContext,
+              request.abortableTasks
+            )),
+            pingTask(request, value));
+        },
+        function (reason) {
+          if (!(settled || 11 < request.status)) {
+            settled = !0;
+            var newTask = createTaskWithID(
+              request,
+              id,
+              thenable,
+              keyPath,
+              implicitSlot,
+              formatContext,
+              request.abortableTasks
+            );
+            erroredTask(request, newTask, reason);
+            enqueueFlush(request);
+          }
+        }
+      );
+      return id;
     default:
       var newTask$12 = createTask(
         request,
@@ -1547,10 +1613,29 @@ function serializeClientReference(
       !0 === resolvedModuleData.async || !0 === clientReference.$$async
         ? [resolvedModuleData.id, resolvedModuleData.chunks, existingId, 1]
         : [resolvedModuleData.id, resolvedModuleData.chunks, existingId];
+    var copy = transformImportMetadata(request, JSCompiler_inline_result, 0);
+    if (copy !== NOT_PLAIN_IMPORT_METADATA)
+      var JSCompiler_temp = stringify(copy);
+    else
+      b: {
+        clientReference = importStringRequest;
+        importStringRequest = request;
+        try {
+          JSCompiler_temp = stringify(
+            JSCompiler_inline_result,
+            importMetadataReplacer
+          );
+          break b;
+        } finally {
+          importStringRequest = clientReference;
+        }
+        JSCompiler_temp = void 0;
+      }
+    var JSCompiler_inline_result$jscomp$0 = JSCompiler_temp;
     request.pendingChunks++;
     var importId = request.nextChunkId++,
-      json = stringify(JSCompiler_inline_result),
-      processedChunk = importId.toString(16) + ":I" + json + "\n";
+      processedChunk =
+        importId.toString(16) + ":I" + JSCompiler_inline_result$jscomp$0 + "\n";
     request.completedImportChunks.push(processedChunk);
     writtenClientReferences.set(clientReferenceKey, importId);
     return parent[0] === REACT_ELEMENT_TYPE && "1" === parentPropertyName
@@ -1622,6 +1707,25 @@ function serializeBlob(request, blob) {
   reader.read().then(progress).catch(error);
   return "$B" + newTask.id.toString(16);
 }
+function escapeStringValue(value) {
+  return "$" === value[0] ? "$" + value : value;
+}
+function serializeImportString(request, value) {
+  if (16 > value.length) return escapeStringValue(value);
+  var writtenStrings = request.writtenImportStrings,
+    existing = writtenStrings.get(value);
+  if (void 0 !== existing) return existing;
+  existing = request.writtenImportStringsSize + value.length;
+  if (32768 < existing) return escapeStringValue(value);
+  request.writtenImportStringsSize = existing;
+  request.pendingChunks++;
+  existing = request.nextChunkId++;
+  var json = stringify(escapeStringValue(value));
+  request.completedImportChunks.push(existing.toString(16) + ":" + json + "\n");
+  request = serializeByValueID(existing);
+  writtenStrings.set(value, request);
+  return request;
+}
 var modelRoot = !1;
 function renderModelDestructive(
   request,
@@ -1653,7 +1757,7 @@ function renderModelDestructive(
         if (3200 < serializedSize) return deferTask(request, task);
         parentPropertyName = value.props;
         parent = parentPropertyName.ref;
-        request = renderElement(
+        value = renderElement(
           request,
           task,
           value.type,
@@ -1661,12 +1765,12 @@ function renderModelDestructive(
           void 0 !== parent ? parent : null,
           parentPropertyName
         );
-        "object" === typeof request &&
-          null !== request &&
+        "object" === typeof value &&
+          null !== value &&
           null !== elementReference &&
-          (writtenObjects.has(request) ||
-            writtenObjects.set(request, elementReference));
-        return request;
+          (writtenObjects.has(value) ||
+            writtenObjects.set(value, elementReference));
+        return value;
       case REACT_LAZY_TYPE:
         if (3200 < serializedSize) return deferTask(request, task);
         task.thenableState = null;
@@ -1698,16 +1802,27 @@ function renderModelDestructive(
       void 0 !== elementReference)
     )
       return "$T" + elementReference;
+    elementReference = TaintRegistryObjects.get(value);
+    void 0 !== elementReference && throwTaintViolation(elementReference);
     elementReference = request.writtenObjects;
     writtenObjects = elementReference.get(value);
     if ("function" === typeof value.then) {
       if (void 0 !== writtenObjects) {
         if (null !== task.keyPath || task.implicitSlot)
-          return "$@" + serializeThenable(request, task, value).toString(16);
+          return (
+            (request = serializeThenable(request, task, value)),
+            "pending_weak" === value.status
+              ? "$w" + request.toString(16)
+              : "$@" + request.toString(16)
+          );
         if (modelRoot === value) modelRoot = null;
         else return writtenObjects;
       }
-      request = "$@" + serializeThenable(request, task, value).toString(16);
+      request = serializeThenable(request, task, value);
+      request =
+        "pending_weak" === value.status
+          ? "$w" + request.toString(16)
+          : "$@" + request.toString(16);
       elementReference.set(value, request);
       return request;
     }
@@ -1799,21 +1914,21 @@ function renderModelDestructive(
     if ("function" === typeof elementReference)
       return (
         null !== task.keyPath
-          ? ((request = [
+          ? ((value = [
               REACT_ELEMENT_TYPE,
               REACT_FRAGMENT_TYPE,
               task.keyPath,
               { children: value }
             ]),
-            (request = task.implicitSlot ? [request] : request))
+            (value = task.implicitSlot ? [value] : value))
           : ((parentPropertyName = elementReference.call(value)),
-            (request = serializeAsyncIterable(
+            (value = serializeAsyncIterable(
               request,
               task,
               value,
               parentPropertyName
             ))),
-        request
+        value
       );
     if (value instanceof Date) return "$D" + value.toJSON();
     request = getPrototypeOf(value);
@@ -1827,23 +1942,21 @@ function renderModelDestructive(
       );
     return value;
   }
-  if ("string" === typeof value) {
-    serializedSize += value.length;
-    if (
+  if ("string" === typeof value)
+    return (
+      (task = TaintRegistryValues.get(value)),
+      void 0 !== task && throwTaintViolation(task.message),
+      (serializedSize += value.length),
       "Z" === value[value.length - 1] &&
       parent[parentPropertyName] instanceof Date
-    )
-      return "$D" + value;
-    if (1024 <= value.length && null !== byteLengthOfChunk)
-      return (
-        request.pendingChunks++,
-        (task = request.nextChunkId++),
-        emitTextChunk(request, task, value, !1),
-        serializeByValueID(task)
-      );
-    request = "$" === value[0] ? "$" + value : value;
-    return request;
-  }
+        ? "$D" + value
+        : 1024 <= value.length && null !== byteLengthOfChunk
+          ? (request.pendingChunks++,
+            (parentPropertyName = request.nextChunkId++),
+            emitTextChunk(request, parentPropertyName, value, !1),
+            serializeByValueID(parentPropertyName))
+          : escapeStringValue(value)
+    );
   if ("boolean" === typeof value) return value;
   if ("number" === typeof value)
     return Number.isFinite(value)
@@ -1866,29 +1979,28 @@ function renderModelDestructive(
       );
     if (value.$$typeof === SERVER_REFERENCE_TAG)
       return (
-        (task = request.writtenServerReferences),
-        (parentPropertyName = task.get(value)),
-        void 0 !== parentPropertyName
-          ? (request = "$h" + parentPropertyName.toString(16))
-          : ((parentPropertyName = value.$$bound),
-            (parentPropertyName =
-              null === parentPropertyName
-                ? null
-                : Promise.resolve(parentPropertyName)),
+        (parentPropertyName = request.writtenServerReferences),
+        (parent = parentPropertyName.get(value)),
+        void 0 !== parent
+          ? (value = "$h" + parent.toString(16))
+          : ((parent = value.$$bound),
+            (parent = null === parent ? null : Promise.resolve(parent)),
             (request = outlineModelWithFormatContext(
               request,
-              { id: value.$$id, bound: parentPropertyName },
+              { id: value.$$id, bound: parent },
               0
             )),
-            task.set(value, request),
-            (request = "$h" + request.toString(16))),
-        request
+            parentPropertyName.set(value, request),
+            (value = "$h" + request.toString(16))),
+        value
       );
     if (
       void 0 !== request.temporaryReferences &&
       ((request = request.temporaryReferences.get(value)), void 0 !== request)
     )
       return "$T" + request;
+    request = TaintRegistryObjects.get(value);
+    void 0 !== request && throwTaintViolation(request);
     if (value.$$typeof === TEMPORARY_REFERENCE_TAG)
       throw Error(
         "Could not reference an opaque temporary reference. This is likely due to misconfiguring the temporaryReferences options on the server."
@@ -1927,7 +2039,12 @@ function renderModelDestructive(
     task.set(value, parentPropertyName);
     return serializeByValueID(parentPropertyName);
   }
-  if ("bigint" === typeof value) return "$n" + value.toString(10);
+  if ("bigint" === typeof value)
+    return (
+      (request = TaintRegistryValues.get(value)),
+      void 0 !== request && throwTaintViolation(request.message),
+      "$n" + value.toString(10)
+    );
   throw Error(
     "Type " +
       typeof value +
@@ -1954,6 +2071,7 @@ function logRecoverableError(request, error) {
 function fatalError(request, error) {
   var onFatalError = request.onFatalError;
   onFatalError(error);
+  cleanupTaintQueue(request);
   null !== request.destination
     ? ((request.status = 14), request.destination.destroy(error))
     : ((request.status = 13), (request.fatalError = error));
@@ -1966,7 +2084,83 @@ function emitErrorChunk(request, id, digest) {
   id = id.toString(16) + ":E" + stringify(digest) + "\n";
   request.completedErrorChunks.push(id);
 }
+var importStringRequest = null;
+function importMetadataReplacer(key, value) {
+  return "string" === typeof value
+    ? ((key = importStringRequest),
+      null === key
+        ? escapeStringValue(value)
+        : serializeImportString(key, value))
+    : value;
+}
+var NOT_PLAIN_IMPORT_METADATA = {};
+function transformImportMetadata(request, value, depth) {
+  switch (typeof value) {
+    case "string":
+      return serializeImportString(request, value);
+    case "number":
+    case "boolean":
+    case "undefined":
+      return value;
+    case "object":
+      if (null === value) return null;
+      if (16 < depth || "function" === typeof value.toJSON)
+        return NOT_PLAIN_IMPORT_METADATA;
+      if (isArrayImpl(value)) {
+        for (
+          var length = value.length, copy = Array(length), i = 0;
+          i < length;
+          i++
+        ) {
+          var element = value[i];
+          if ("string" === typeof element)
+            copy[i] = serializeImportString(request, element);
+          else {
+            element = transformImportMetadata(request, element, depth + 1);
+            if (element === NOT_PLAIN_IMPORT_METADATA)
+              return NOT_PLAIN_IMPORT_METADATA;
+            copy[i] = element;
+          }
+        }
+        return copy;
+      }
+      length = getPrototypeOf(value);
+      if (length !== ObjectPrototype$1 && null !== length)
+        return NOT_PLAIN_IMPORT_METADATA;
+      length = Object.keys(value);
+      copy = {};
+      for (i = 0; i < length.length; i++) {
+        element = length[i];
+        if (element in ObjectPrototype$1) return NOT_PLAIN_IMPORT_METADATA;
+        var element$28 = value[element];
+        if ("string" === typeof element$28)
+          copy[element] = serializeImportString(request, element$28);
+        else {
+          element$28 = transformImportMetadata(request, element$28, depth + 1);
+          if (element$28 === NOT_PLAIN_IMPORT_METADATA)
+            return NOT_PLAIN_IMPORT_METADATA;
+          copy[element] = element$28;
+        }
+      }
+      return copy;
+    default:
+      return NOT_PLAIN_IMPORT_METADATA;
+  }
+}
 function emitTypedArrayChunk(request, id, tag, typedArray, debug) {
+  if (TaintRegistryByteLengths.has(typedArray.byteLength)) {
+    var tainted = TaintRegistryValues.get(
+      String.fromCharCode.apply(
+        String,
+        new Uint8Array(
+          typedArray.buffer,
+          typedArray.byteOffset,
+          typedArray.byteLength
+        )
+      )
+    );
+    void 0 !== tainted && throwTaintViolation(tainted.message);
+  }
   debug ? request.pendingDebugChunks++ : request.pendingChunks++;
   typedArray = new Uint8Array(
     typedArray.buffer,
@@ -1994,7 +2188,9 @@ function emitTextChunk(request, id, text, debug) {
 function emitChunk(request, task, value) {
   var id = task.id;
   "string" === typeof value && null !== byteLengthOfChunk
-    ? emitTextChunk(request, id, value, !1)
+    ? ((task = TaintRegistryValues.get(value)),
+      void 0 !== task && throwTaintViolation(task.message),
+      emitTextChunk(request, id, value, !1))
     : value instanceof ArrayBuffer
       ? emitTypedArrayChunk(request, id, "A", new Uint8Array(value), !1)
       : value instanceof Int8Array
@@ -2226,6 +2422,7 @@ function flushCompletedChunks(request) {
           "This render completed successfully. All cacheSignals are now aborted to allow clean up of any unused resources."
         )
       ),
+    cleanupTaintQueue(request),
     null !== request.destination &&
       ((request.status = 14),
       request.destination.end(),
@@ -2290,6 +2487,17 @@ function finishAbort(request, abortedTasks, errorId) {
     logRecoverableError(request, error, null), fatalError(request, error);
   }
 }
+function attachAbortSignal(request, signal) {
+  signal.aborted
+    ? abort(request, signal.reason)
+    : signal.addEventListener(
+        "abort",
+        function () {
+          abort(request, signal.reason);
+        },
+        { signal: request.cacheController.signal }
+      );
+}
 function abort(request, reason) {
   if (!(11 < request.status))
     try {
@@ -2334,9 +2542,9 @@ function abort(request, reason) {
         onAllReady();
         flushCompletedChunks(request);
       }
-    } catch (error$28) {
-      logRecoverableError(request, error$28, null),
-        fatalError(request, error$28);
+    } catch (error$35) {
+      logRecoverableError(request, error$35, null),
+        fatalError(request, error$35);
     }
 }
 function resolveServerReference(bundlerConfig, id) {
@@ -3117,12 +3325,12 @@ function parseReadableStream(response, reference, type) {
               (previousBlockedChunk = chunk));
         } else {
           chunk = previousBlockedChunk;
-          var chunk$33 = new ReactPromise("pending", null, null);
-          chunk$33.then(enqueue, flightController.error);
-          previousBlockedChunk = chunk$33;
+          var chunk$40 = new ReactPromise("pending", null, null);
+          chunk$40.then(enqueue, flightController.error);
+          previousBlockedChunk = chunk$40;
           chunk.then(function () {
-            previousBlockedChunk === chunk$33 && (previousBlockedChunk = null);
-            resolveModelChunk(response, chunk$33, json, -1);
+            previousBlockedChunk === chunk$40 && (previousBlockedChunk = null);
+            resolveModelChunk(response, chunk$40, json, -1);
           });
         }
       },
@@ -3854,17 +4062,7 @@ exports.prerender = function (model, turbopackMap, options) {
       options ? options.identifierPrefix : void 0,
       options ? options.temporaryReferences : void 0
     );
-    if (options && options.signal) {
-      var signal = options.signal;
-      if (signal.aborted) abort(request, signal.reason);
-      else {
-        var listener = function () {
-          abort(request, signal.reason);
-          signal.removeEventListener("abort", listener);
-        };
-        signal.addEventListener("abort", listener);
-      }
-    }
+    options && options.signal && attachAbortSignal(request, options.signal);
     startWork(request);
   });
 };
@@ -3888,17 +4086,7 @@ exports.prerenderToNodeStream = function (model, turbopackMap, options) {
       options ? options.identifierPrefix : void 0,
       options ? options.temporaryReferences : void 0
     );
-    if (options && options.signal) {
-      var signal = options.signal;
-      if (signal.aborted) abort(request, signal.reason);
-      else {
-        var listener = function () {
-          abort(request, signal.reason);
-          signal.removeEventListener("abort", listener);
-        };
-        signal.addEventListener("abort", listener);
-      }
-    }
+    options && options.signal && attachAbortSignal(request, options.signal);
     startWork(request);
   });
 };
@@ -3976,17 +4164,7 @@ exports.renderToReadableStream = function (model, turbopackMap, options) {
     options ? options.identifierPrefix : void 0,
     options ? options.temporaryReferences : void 0
   );
-  if (options && options.signal) {
-    var signal = options.signal;
-    if (signal.aborted) abort(request, signal.reason);
-    else {
-      var listener = function () {
-        abort(request, signal.reason);
-        signal.removeEventListener("abort", listener);
-      };
-      signal.addEventListener("abort", listener);
-    }
-  }
+  options && options.signal && attachAbortSignal(request, options.signal);
   var writable;
   return new ReadableStream(
     {
