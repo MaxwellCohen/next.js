@@ -76,7 +76,8 @@ function getIteratorFn(maybeIterable) {
     maybeIterable["@@iterator"];
   return "function" === typeof maybeIterable ? maybeIterable : null;
 }
-var REACT_OPTIMISTIC_KEY = Symbol.for("react.optimistic_key"),
+var ASYNC_ITERATOR = Symbol.asyncIterator,
+  REACT_OPTIMISTIC_KEY = Symbol.for("react.optimistic_key"),
   isArrayImpl = Array.isArray;
 function murmurhash3_32_gc(key, seed) {
   var remainder = key.length & 3;
@@ -130,6 +131,20 @@ function murmurhash3_32_gc(key, seed) {
     (3266489909 * (h1 & 65535) + (((3266489909 * (h1 >>> 16)) & 65535) << 16)) &
     4294967295;
   return (h1 ^ (h1 >>> 16)) >>> 0;
+}
+function readAsDataURL(blob) {
+  return blob.arrayBuffer().then(function (arrayBuffer) {
+    arrayBuffer =
+      "function" === typeof Buffer && "function" === typeof Buffer.from
+        ? Buffer.from(arrayBuffer).toString("base64")
+        : btoa(String.fromCharCode.apply(String, new Uint8Array(arrayBuffer)));
+    return (
+      "data:" +
+      (blob.type || "application/octet-stream") +
+      ";base64," +
+      arrayBuffer
+    );
+  });
 }
 var assign = Object.assign,
   hasOwnProperty = Object.prototype.hasOwnProperty,
@@ -319,10 +334,12 @@ function createResumableState(
   bootstrapScripts,
   bootstrapModules
 ) {
+  var streamingFormat = 0;
+  void 0 !== externalRuntimeConfig && (streamingFormat = 1);
   return {
     idPrefix: void 0 === identifierPrefix ? "" : identifierPrefix,
     nextFormID: 0,
-    streamingFormat: 0,
+    streamingFormat: streamingFormat,
     bootstrapScriptContent: bootstrapScriptContent,
     bootstrapScripts: bootstrapScripts,
     bootstrapModules: bootstrapModules,
@@ -462,7 +479,11 @@ function pushViewTransitionAttributes(target, formatContext) {
     "none" !== formatContext.exit &&
       pushStringAttribute(target, "vt-exit", formatContext.exit),
     "none" !== formatContext.share &&
-      pushStringAttribute(target, "vt-share", formatContext.share));
+      pushStringAttribute(target, "vt-share", formatContext.share),
+    "none" !== formatContext.parentEnter &&
+      pushStringAttribute(target, "vt-parent-enter", formatContext.parentEnter),
+    "none" !== formatContext.parentExit &&
+      pushStringAttribute(target, "vt-parent-exit", formatContext.parentExit));
 }
 var styleNameCache = new Map();
 function pushStyleAttribute(target, style) {
@@ -578,6 +599,28 @@ function pushFormActionAttribute(
   null != formTarget && pushAttribute(target, "formTarget", formTarget);
   return formData;
 }
+var blobCache = null;
+function pushSrcObjectAttribute(target, blob) {
+  null === blobCache && (blobCache = new WeakMap());
+  var suspenseCache = blobCache,
+    thenable = suspenseCache.get(blob);
+  void 0 === thenable &&
+    ((thenable = readAsDataURL(blob)),
+    thenable.then(
+      function (result) {
+        thenable.status = "fulfilled";
+        thenable.value = result;
+      },
+      function (error) {
+        thenable.status = "rejected";
+        thenable.reason = error;
+      }
+    ),
+    suspenseCache.set(blob, thenable));
+  if ("rejected" === thenable.status) throw thenable.reason;
+  if ("fulfilled" !== thenable.status) throw thenable;
+  target.push(" ", "src", '="', escapeTextForBrowser(thenable.value), '"');
+}
 function pushAttribute(target, name, value) {
   switch (name) {
     case "className":
@@ -597,6 +640,15 @@ function pushAttribute(target, name, value) {
       pushStyleAttribute(target, value);
       break;
     case "src":
+      if (
+        "object" === typeof value &&
+        null !== value &&
+        "function" === typeof Blob &&
+        value instanceof Blob
+      ) {
+        pushSrcObjectAttribute(target, value);
+        break;
+      }
     case "href":
       if ("" === value) break;
     case "action":
@@ -763,7 +815,10 @@ function flattenOptionChildren(children) {
   return content;
 }
 function injectFormReplayingRuntime(resumableState, renderState) {
-  if (0 === (resumableState.instructions & 16)) {
+  if (
+    0 === (resumableState.instructions & 16) &&
+    !renderState.externalRuntimeScript
+  ) {
     resumableState.instructions |= 16;
     var preamble = renderState.preamble,
       bootstrapChunks = renderState.bootstrapChunks;
@@ -2024,14 +2079,30 @@ function writeBootstrap(destination, renderState) {
     : !0;
 }
 function writeStartPendingSuspenseBoundary(destination, renderState, id) {
-  destination.push('\x3c!--$?--\x3e<template id="');
   if (null === id) throw Error(formatProdErrorMessage(395));
+  id = id.toString(16);
+  destination.push("\x3c!--$?");
+  destination.push(id);
+  destination.push('--\x3e<?start name="');
   destination.push(renderState.boundaryPrefix);
-  renderState = id.toString(16);
-  destination.push(renderState);
-  return destination.push('"></template>');
+  destination.push(id);
+  return destination.push('">');
 }
-function writeStartSegment(destination, renderState, formatContext, id) {
+function writeStartSegment(
+  destination,
+  renderState,
+  formatContext,
+  id,
+  forDeclarativeBoundary
+) {
+  if (forDeclarativeBoundary)
+    return (
+      destination.push('<template for="'),
+      destination.push(renderState.boundaryPrefix),
+      (renderState = id.toString(16)),
+      destination.push(renderState),
+      destination.push('">')
+    );
   switch (formatContext.insertionMode) {
     case 0:
     case 1:
@@ -2096,7 +2167,8 @@ function writeStartSegment(destination, renderState, formatContext, id) {
       throw Error(formatProdErrorMessage(397));
   }
 }
-function writeEndSegment(destination, formatContext) {
+function writeEndSegment(destination, formatContext, forDeclarativeBoundary) {
+  if (forDeclarativeBoundary) return destination.push("</template>");
   switch (formatContext.insertionMode) {
     case 0:
     case 1:
@@ -2118,6 +2190,81 @@ function writeEndSegment(destination, formatContext) {
     default:
       throw Error(formatProdErrorMessage(397));
   }
+}
+function writeCompletedBoundaryInstruction(
+  destination,
+  resumableState,
+  renderState,
+  id,
+  hoistableState
+) {
+  var declarative = null == hoistableState,
+    requiresStyleInsertion = !declarative && renderState.stylesToHoist,
+    requiresViewTransitions = 0 !== (resumableState.instructions & 128);
+  renderState.stylesToHoist = !1;
+  var scriptFormat = declarative || 0 === resumableState.streamingFormat;
+  scriptFormat
+    ? (destination.push(renderState.startInlineScript),
+      destination.push(">"),
+      requiresStyleInsertion
+        ? (0 === (resumableState.instructions & 4) &&
+            ((resumableState.instructions |= 4),
+            destination.push(
+              '$RX=function(d,e,f,g,h){var c,b=document.getElementById(d);if(!b)a:{b=document;for(b=b.createTreeWalker(b.documentElement||b,NodeFilter.SHOW_PROCESSING_INSTRUCTION|NodeFilter.SHOW_COMMENT);c=b.nextNode();)if(7===c.nodeType){var a;if(a="start"===c.target)a=c,a="function"===typeof a.getAttribute?a.getAttribute("name"):(a=(a.data||a.nodeValue||"").match(/(?:^|\\s)name=["\']([^"\']+)["\']/))?a[1]:null,a=a===d;if(a){b=c;break a}}else{if(a=8===c.nodeType)a=c.data,"string"!==typeof a||63!==a.charCodeAt(0)?a=!1:(a=a.match(/^\\?([^\\s]+)\\s+name=["\']([^"\']+)["\']/),a=null!=a&&"start"===a[1]&&a[2]===d);if(a){b=c;break a}}b=null}if(c=b)b=c.previousSibling,b.data="$!",a=c,1!==c.nodeType&&(a=b.ownerDocument.createElement("template"),a.id=d,b.parentNode.insertBefore(a,c)),d=a.dataset,null!=e&&(d.dgst=e),f&&(d.msg=f),g&&(d.stck=g),h&&(d.cstck=h),b._reactRetry&&b._reactRetry()};'
+            )),
+          0 === (resumableState.instructions & 2) &&
+            ((resumableState.instructions |= 2),
+            destination.push(
+              'function k(d){var c=document;c=c.createTreeWalker(c.documentElement||c,NodeFilter.SHOW_PROCESSING_INSTRUCTION|NodeFilter.SHOW_COMMENT);for(var a;a=c.nextNode();)if(7===a.nodeType){var b;if(b="start"===a.target)b=a,b="function"===typeof b.getAttribute?b.getAttribute("name"):(b=(b.data||b.nodeValue||"").match(/(?:^|\\s)name=["\']([^"\']+)["\']/))?b[1]:null,b=b===d;if(b)return a}else{if(b=8===a.nodeType)b=a.data,"string"!==typeof b||63!==b.charCodeAt(0)?b=!1:(b=b.match(/^\\?([^\\s]+)\\s+name=["\']([^"\']+)["\']/),b=null!=b&&"start"===b[1]&&b[2]===d);if(b)return a}return null};$RB=[];\n$RV=function(d){$RT=performance.now();for(var c=0;c<d.length;c+=2){var a=d[c],b=d[c+1];null!==b.parentNode&&b.parentNode.removeChild(b);var e=a.parentNode;if(e){var g=a.previousSibling,h=0;do{if(a&&8===a.nodeType){var f=a.data;if("/$"===f||"/&"===f)if(0===h)break;else h--;else("$"===f||36===f.charCodeAt(0)&&63===f.charCodeAt(1)||"$~"===f||"$!"===f||"&"===f)&&h++}f=a.nextSibling;e.removeChild(a);a=f}while(a);for(;b.firstChild;)e.insertBefore(b.firstChild,a);g.data="$";g._reactRetry&&requestAnimationFrame(g._reactRetry)}}d.length=\n0};\n$RC=function(d,c){if(null==c){a:{c=document.querySelectorAll("template");for(var a=0;a<c.length;a++)if(c[a].getAttribute("for")===d){c=c[a];break a}c=null}if(null!==c&&null!==c.parentNode)if(a=k(d),null===a||null===a.parentNode)c.parentNode.removeChild(c);else{for(var b=a.parentNode,e=a.nextSibling;e;){var g=e.nextSibling,h=7===e.nodeType?"end"===e.target:8===e.nodeType?"string"===typeof e.data&&/^\\?end\\b/.test(e.data):!1;b.removeChild(e);if(h)break;e=g}for(e=c.content;e.firstChild;)b.insertBefore(e.firstChild,a);\nb.removeChild(a);null!==c.parentNode&&c.parentNode.removeChild(c)}d="$?"+d.slice(d.indexOf(":")+1);for(c=document.createTreeWalker(document.documentElement||document,128);a=c.nextNode();)if(a.data===d){d=a;d.data="$";d._reactRetry&&requestAnimationFrame(d._reactRetry);break}}else if(c=document.getElementById(c))(d=(a=document.getElementById(d))?a:k(d))?(d.previousSibling.data="$~",$RB.push(d,c),2===$RB.length&&("number"!==typeof $RT?requestAnimationFrame($RV.bind(null,\n$RB)):(d=performance.now(),setTimeout($RV.bind(null,$RB),2300>d&&2E3<d?2300-d:$RT+300-d)))):c.parentNode.removeChild(c)};'
+            )),
+          requiresViewTransitions &&
+            0 === (resumableState.instructions & 256) &&
+            ((resumableState.instructions |= 256),
+            destination.push(
+              '$RV=function(B,g){function h(a,c){var e=a.getAttribute(c);e&&(c=a.style,m.push(a,c.viewTransitionName,c.viewTransitionClass),"auto"!==e&&(c.viewTransitionClass=e),(a=a.getAttribute("vt-name"))||(a="_T_"+N++ +"_"),a=CSS.escape(a)!==a?"r-"+btoa(a).replace(/=/g,""):a,c.viewTransitionName=a,C=!0)}var C=!1,N=0,m=[];try{var f=document.__reactViewTransition;if(f){f.finished.finally($RV.bind(null,g));return}var n=new Map;for(f=1;f<g.length;f+=2)for(var k=g[f].querySelectorAll("[vt-share]"),d=0;d<k.length;d++){var b=k[d];n.set(b.getAttribute("vt-name"),b)}var u=[];for(k=0;k<g.length;k+=2){var D=g[k],x=D.parentNode;if(x){var v=x.getBoundingClientRect();if(v.left||v.top||v.width||v.height){b=D;for(f=0;b;){if(8===b.nodeType){var l=b.data;if("/$"===l)if(0===f)break;else f--;else("$"===l||36===l.charCodeAt(0)&&63===l.charCodeAt(1)||"$~"===l||"$!"===l||"&"===l)&&f++}else if(1===b.nodeType){d=b;var E=d.getAttribute("vt-name"),y=n.get(E);h(d,y?"vt-share":"vt-exit");y&&(h(y,"vt-share"),n.set(E,\nnull));for(var F=d.querySelectorAll("[vt-share]"),z=0;z<F.length;z++){var G=F[z],H=G.getAttribute("vt-name"),I=n.get(H);I&&(h(G,"vt-share"),h(I,"vt-share"),n.set(H,null))}var J=d.querySelectorAll("[vt-parent-exit]");for(d=0;d<J.length;d++)h(J[d],"vt-parent-exit")}b=b.nextSibling}for(var K=g[k+1],p=K.firstElementChild;p;){null!==n.get(p.getAttribute("vt-name"))&&h(p,"vt-enter");var L=p.querySelectorAll("[vt-parent-enter]");for(b=0;b<L.length;b++)h(L[b],"vt-parent-enter");p=p.nextElementSibling}b=x;\ndo for(var q=b.firstElementChild;q;){var M=q.getAttribute("vt-update");M&&"none"!==M&&!m.includes(q)&&h(q,"vt-update");q=q.nextElementSibling}while((b=b.parentNode)&&1===b.nodeType&&"none"!==b.getAttribute("vt-update"));u.push.apply(u,K.querySelectorAll(\'img[src]:not([loading="lazy"])\'))}}}if(C){var A=document.__reactViewTransition=document.startViewTransition({update:function(){B(g);for(var a=[document.documentElement.clientHeight,document.fonts.ready],c={},e=0;e<u.length;c={g:c.g},e++)if(c.g=u[e],\n!c.g.complete){var r=c.g.getBoundingClientRect();0<r.bottom&&0<r.right&&r.top<window.innerHeight&&r.left<window.innerWidth&&(r=new Promise(function(w){return function(t){w.g.addEventListener("load",t);w.g.addEventListener("error",t)}}(c)),a.push(r))}return Promise.race([Promise.all(a),new Promise(function(w){var t=performance.now();setTimeout(w,2300>t&&2E3<t?2300-t:500)})])},types:[]});A.ready.finally(function(){for(var a=m.length-3;0<=a;a-=3){var c=m[a],e=c.style;e.viewTransitionName=m[a+1];e.viewTransitionClass=\nm[a+1];""===c.getAttribute("style")&&c.removeAttribute("style")}});A.finished.finally(function(){document.__reactViewTransition===A&&(document.__reactViewTransition=null)});$RB=[];return}}catch(a){}B(g)}.bind(null,$RV);'
+            )),
+          0 === (resumableState.instructions & 8)
+            ? ((resumableState.instructions |= 8),
+              destination.push(
+                'function x(c){var f=document.getElementById(c);if(f)c=f;else a:{f=document;f=f.createTreeWalker(f.documentElement||f,NodeFilter.SHOW_PROCESSING_INSTRUCTION|NodeFilter.SHOW_COMMENT);for(var d;d=f.nextNode();)if(7===d.nodeType){var a;if(a="start"===d.target)a=d,a="function"===typeof a.getAttribute?a.getAttribute("name"):(a=(a.data||a.nodeValue||"").match(/(?:^|\\s)name=["\']([^"\']+)["\']/))?a[1]:null,a=a===c;if(a){c=d;break a}}else{if(a=8===d.nodeType)a=d.data,"string"!==typeof a||63!==a.charCodeAt(0)?a=!1:(a=a.match(/^\\?([^\\s]+)\\s+name=["\']([^"\']+)["\']/),a=null!=a&&"start"===a[1]&&a[2]===c);if(a){c=d;break a}}c=null}return c};$RM=new Map;\n$RR=function(c,f,d){function a(t){this._p=null;t()}for(var u=new Map,v=document,n,e,k=v.querySelectorAll("link[data-precedence],style[data-precedence]"),w=[],p=0;e=k[p++];)"not all"===e.getAttribute("media")?w.push(e):("LINK"===e.tagName&&$RM.set(e.getAttribute("href"),e),u.set(e.dataset.precedence,n=e));k=0;e=[];var q,b;for(p=!0;;){if(p){var l=d[k++];if(!l){p=!1;k=0;continue}var g=!1,r=0;var h=l[r++];if(b=$RM.get(h)){var m=b._p;g=!0}else{b=v.createElement("link");b.href=h;b.rel=\n"stylesheet";for(b.dataset.precedence=q=l[r++];m=l[r++];)b.setAttribute(m,l[r++]);m=b._p=new Promise(function(t,y){b.onload=a.bind(b,t);b.onerror=a.bind(b,y)});$RM.set(h,b)}h=b.getAttribute("media");!m||h&&!matchMedia(h).matches||e.push(m);if(g)continue}else{b=w[k++];if(!b)break;q=b.getAttribute("data-precedence");b.removeAttribute("media")}g=u.get(q)||n;g===n&&(n=b);u.set(q,b);g?g.parentNode.insertBefore(b,g.nextSibling):(g=v.head,g.insertBefore(b,g.firstChild))}if(d=x(c))d.previousSibling.data=\n"$~";Promise.all(e).then($RC.bind(null,c,f),$RX.bind(null,c,"CSS failed to load"))};$RR("'
+              ))
+            : destination.push('$RR("'))
+        : (0 === (resumableState.instructions & 2) &&
+            ((resumableState.instructions |= 2),
+            destination.push(
+              'function k(d){var c=document;c=c.createTreeWalker(c.documentElement||c,NodeFilter.SHOW_PROCESSING_INSTRUCTION|NodeFilter.SHOW_COMMENT);for(var a;a=c.nextNode();)if(7===a.nodeType){var b;if(b="start"===a.target)b=a,b="function"===typeof b.getAttribute?b.getAttribute("name"):(b=(b.data||b.nodeValue||"").match(/(?:^|\\s)name=["\']([^"\']+)["\']/))?b[1]:null,b=b===d;if(b)return a}else{if(b=8===a.nodeType)b=a.data,"string"!==typeof b||63!==b.charCodeAt(0)?b=!1:(b=b.match(/^\\?([^\\s]+)\\s+name=["\']([^"\']+)["\']/),b=null!=b&&"start"===b[1]&&b[2]===d);if(b)return a}return null};$RB=[];\n$RV=function(d){$RT=performance.now();for(var c=0;c<d.length;c+=2){var a=d[c],b=d[c+1];null!==b.parentNode&&b.parentNode.removeChild(b);var e=a.parentNode;if(e){var g=a.previousSibling,h=0;do{if(a&&8===a.nodeType){var f=a.data;if("/$"===f||"/&"===f)if(0===h)break;else h--;else("$"===f||36===f.charCodeAt(0)&&63===f.charCodeAt(1)||"$~"===f||"$!"===f||"&"===f)&&h++}f=a.nextSibling;e.removeChild(a);a=f}while(a);for(;b.firstChild;)e.insertBefore(b.firstChild,a);g.data="$";g._reactRetry&&requestAnimationFrame(g._reactRetry)}}d.length=\n0};\n$RC=function(d,c){if(null==c){a:{c=document.querySelectorAll("template");for(var a=0;a<c.length;a++)if(c[a].getAttribute("for")===d){c=c[a];break a}c=null}if(null!==c&&null!==c.parentNode)if(a=k(d),null===a||null===a.parentNode)c.parentNode.removeChild(c);else{for(var b=a.parentNode,e=a.nextSibling;e;){var g=e.nextSibling,h=7===e.nodeType?"end"===e.target:8===e.nodeType?"string"===typeof e.data&&/^\\?end\\b/.test(e.data):!1;b.removeChild(e);if(h)break;e=g}for(e=c.content;e.firstChild;)b.insertBefore(e.firstChild,a);\nb.removeChild(a);null!==c.parentNode&&c.parentNode.removeChild(c)}d="$?"+d.slice(d.indexOf(":")+1);for(c=document.createTreeWalker(document.documentElement||document,128);a=c.nextNode();)if(a.data===d){d=a;d.data="$";d._reactRetry&&requestAnimationFrame(d._reactRetry);break}}else if(c=document.getElementById(c))(d=(a=document.getElementById(d))?a:k(d))?(d.previousSibling.data="$~",$RB.push(d,c),2===$RB.length&&("number"!==typeof $RT?requestAnimationFrame($RV.bind(null,\n$RB)):(d=performance.now(),setTimeout($RV.bind(null,$RB),2300>d&&2E3<d?2300-d:$RT+300-d)))):c.parentNode.removeChild(c)};'
+            )),
+          requiresViewTransitions &&
+            0 === (resumableState.instructions & 256) &&
+            ((resumableState.instructions |= 256),
+            destination.push(
+              '$RV=function(B,g){function h(a,c){var e=a.getAttribute(c);e&&(c=a.style,m.push(a,c.viewTransitionName,c.viewTransitionClass),"auto"!==e&&(c.viewTransitionClass=e),(a=a.getAttribute("vt-name"))||(a="_T_"+N++ +"_"),a=CSS.escape(a)!==a?"r-"+btoa(a).replace(/=/g,""):a,c.viewTransitionName=a,C=!0)}var C=!1,N=0,m=[];try{var f=document.__reactViewTransition;if(f){f.finished.finally($RV.bind(null,g));return}var n=new Map;for(f=1;f<g.length;f+=2)for(var k=g[f].querySelectorAll("[vt-share]"),d=0;d<k.length;d++){var b=k[d];n.set(b.getAttribute("vt-name"),b)}var u=[];for(k=0;k<g.length;k+=2){var D=g[k],x=D.parentNode;if(x){var v=x.getBoundingClientRect();if(v.left||v.top||v.width||v.height){b=D;for(f=0;b;){if(8===b.nodeType){var l=b.data;if("/$"===l)if(0===f)break;else f--;else("$"===l||36===l.charCodeAt(0)&&63===l.charCodeAt(1)||"$~"===l||"$!"===l||"&"===l)&&f++}else if(1===b.nodeType){d=b;var E=d.getAttribute("vt-name"),y=n.get(E);h(d,y?"vt-share":"vt-exit");y&&(h(y,"vt-share"),n.set(E,\nnull));for(var F=d.querySelectorAll("[vt-share]"),z=0;z<F.length;z++){var G=F[z],H=G.getAttribute("vt-name"),I=n.get(H);I&&(h(G,"vt-share"),h(I,"vt-share"),n.set(H,null))}var J=d.querySelectorAll("[vt-parent-exit]");for(d=0;d<J.length;d++)h(J[d],"vt-parent-exit")}b=b.nextSibling}for(var K=g[k+1],p=K.firstElementChild;p;){null!==n.get(p.getAttribute("vt-name"))&&h(p,"vt-enter");var L=p.querySelectorAll("[vt-parent-enter]");for(b=0;b<L.length;b++)h(L[b],"vt-parent-enter");p=p.nextElementSibling}b=x;\ndo for(var q=b.firstElementChild;q;){var M=q.getAttribute("vt-update");M&&"none"!==M&&!m.includes(q)&&h(q,"vt-update");q=q.nextElementSibling}while((b=b.parentNode)&&1===b.nodeType&&"none"!==b.getAttribute("vt-update"));u.push.apply(u,K.querySelectorAll(\'img[src]:not([loading="lazy"])\'))}}}if(C){var A=document.__reactViewTransition=document.startViewTransition({update:function(){B(g);for(var a=[document.documentElement.clientHeight,document.fonts.ready],c={},e=0;e<u.length;c={g:c.g},e++)if(c.g=u[e],\n!c.g.complete){var r=c.g.getBoundingClientRect();0<r.bottom&&0<r.right&&r.top<window.innerHeight&&r.left<window.innerWidth&&(r=new Promise(function(w){return function(t){w.g.addEventListener("load",t);w.g.addEventListener("error",t)}}(c)),a.push(r))}return Promise.race([Promise.all(a),new Promise(function(w){var t=performance.now();setTimeout(w,2300>t&&2E3<t?2300-t:500)})])},types:[]});A.ready.finally(function(){for(var a=m.length-3;0<=a;a-=3){var c=m[a],e=c.style;e.viewTransitionName=m[a+1];e.viewTransitionClass=\nm[a+1];""===c.getAttribute("style")&&c.removeAttribute("style")}});A.finished.finally(function(){document.__reactViewTransition===A&&(document.__reactViewTransition=null)});$RB=[];return}}catch(a){}B(g)}.bind(null,$RV);'
+            )),
+          destination.push('$RC("')))
+    : requiresStyleInsertion
+      ? destination.push('<template data-rri="" data-bid="')
+      : destination.push('<template data-rci="" data-bid="');
+  resumableState = id.toString(16);
+  destination.push(renderState.boundaryPrefix);
+  destination.push(resumableState);
+  declarative
+    ? scriptFormat && destination.push('"')
+    : (scriptFormat
+        ? destination.push('","')
+        : destination.push('" data-sid="'),
+      destination.push(renderState.segmentPrefix),
+      destination.push(resumableState),
+      requiresStyleInsertion
+        ? scriptFormat
+          ? (destination.push('",'),
+            writeStyleResourceDependenciesInJS(destination, hoistableState))
+          : (destination.push('" data-sty="'),
+            writeStyleResourceDependenciesInAttr(destination, hoistableState))
+        : scriptFormat && destination.push('"'));
+  hoistableState = scriptFormat
+    ? destination.push(")\x3c/script>")
+    : destination.push('"></template>');
+  return writeBootstrap(destination, renderState) && hoistableState;
 }
 var regexForJSStringsInInstructionScripts = /[<\u2028\u2029]/g;
 function escapeJSStringsForInstructionScripts(input) {
@@ -2200,6 +2347,16 @@ function writeHoistablesForBoundary(destination, hoistableState, renderState) {
     (renderState.stylesToHoist = !0);
   return destinationHasCapacity;
 }
+function boundaryRequiresStyleInsertion(hoistableState) {
+  var requires = !1;
+  hoistableState.styles.forEach(function (styleQueue) {
+    0 < styleQueue.hrefs.length && (requires = !0);
+  });
+  hoistableState.stylesheets.forEach(function (stylesheet) {
+    2 !== stylesheet.state && (requires = !0);
+  });
+  return requires;
+}
 function flushResource(resource) {
   for (var i = 0; i < resource.length; i++) this.push(resource[i]);
   resource.length = 0;
@@ -2267,6 +2424,15 @@ function preloadLateStyle(stylesheet) {
 function preloadLateStyles(styleQueue) {
   styleQueue.sheets.forEach(preloadLateStyle, this);
   styleQueue.sheets.clear();
+}
+function writeCompletedShellIdAttribute(destination, resumableState) {
+  0 === (resumableState.instructions & 32) &&
+    ((resumableState.instructions |= 32),
+    (resumableState = "_" + resumableState.idPrefix + "R_"),
+    destination.push(' id="'),
+    (resumableState = escapeTextForBrowser(resumableState)),
+    destination.push(resumableState),
+    destination.push('"'));
 }
 function pushCompletedShellIdAttribute(target, resumableState) {
   0 === (resumableState.instructions & 32) &&
@@ -2372,6 +2538,103 @@ function writeStyleResourceAttributeInJS(destination, name, value) {
   destination.push(attributeName);
   destination.push(",");
   attributeName = escapeJSObjectForInstructionScripts(name);
+  destination.push(attributeName);
+}
+function writeStyleResourceDependenciesInAttr(destination, hoistableState) {
+  destination.push("[");
+  var nextArrayOpenBrackChunk = "[";
+  hoistableState.stylesheets.forEach(function (resource) {
+    if (2 !== resource.state)
+      if (3 === resource.state)
+        destination.push(nextArrayOpenBrackChunk),
+          (resource = escapeTextForBrowser(
+            JSON.stringify("" + resource.props.href)
+          )),
+          destination.push(resource),
+          destination.push("]"),
+          (nextArrayOpenBrackChunk = ",[");
+      else {
+        destination.push(nextArrayOpenBrackChunk);
+        var precedence = resource.props["data-precedence"],
+          props = resource.props,
+          coercedHref = sanitizeURL("" + resource.props.href);
+        coercedHref = escapeTextForBrowser(JSON.stringify(coercedHref));
+        destination.push(coercedHref);
+        precedence = "" + precedence;
+        destination.push(",");
+        precedence = escapeTextForBrowser(JSON.stringify(precedence));
+        destination.push(precedence);
+        for (var propKey in props)
+          if (
+            hasOwnProperty.call(props, propKey) &&
+            ((precedence = props[propKey]), null != precedence)
+          )
+            switch (propKey) {
+              case "href":
+              case "rel":
+              case "precedence":
+              case "data-precedence":
+                break;
+              case "children":
+              case "dangerouslySetInnerHTML":
+                throw Error(formatProdErrorMessage(399, "link"));
+              default:
+                writeStyleResourceAttributeInAttr(
+                  destination,
+                  propKey,
+                  precedence
+                );
+            }
+        destination.push("]");
+        nextArrayOpenBrackChunk = ",[";
+        resource.state = 3;
+      }
+  });
+  destination.push("]");
+}
+function writeStyleResourceAttributeInAttr(destination, name, value) {
+  var attributeName = name.toLowerCase();
+  switch (typeof value) {
+    case "function":
+    case "symbol":
+      return;
+  }
+  switch (name) {
+    case "innerHTML":
+    case "dangerouslySetInnerHTML":
+    case "suppressContentEditableWarning":
+    case "suppressHydrationWarning":
+    case "style":
+    case "ref":
+      return;
+    case "className":
+      attributeName = "class";
+      name = "" + value;
+      break;
+    case "hidden":
+      if (!1 === value) return;
+      name = "";
+      break;
+    case "src":
+    case "href":
+      value = sanitizeURL(value);
+      name = "" + value;
+      break;
+    default:
+      if (
+        (2 < name.length &&
+          ("o" === name[0] || "O" === name[0]) &&
+          ("n" === name[1] || "N" === name[1])) ||
+        !isAttributeNameSafe(name)
+      )
+        return;
+      name = "" + value;
+  }
+  destination.push(",");
+  attributeName = escapeTextForBrowser(JSON.stringify(attributeName));
+  destination.push(attributeName);
+  destination.push(",");
+  attributeName = escapeTextForBrowser(JSON.stringify(name));
   destination.push(attributeName);
 }
 function createHoistableState() {
@@ -2800,16 +3063,16 @@ function createRenderState(resumableState, generateStaticMarkup) {
       "\x3c/script>"
     ));
   bootstrapScriptContent = idPrefix + "P:";
-  var JSCompiler_object_inline_segmentPrefix_1724 = idPrefix + "S:";
+  var JSCompiler_object_inline_segmentPrefix_1865 = idPrefix + "S:";
   idPrefix += "B:";
-  var JSCompiler_object_inline_preconnects_1738 = new Set(),
-    JSCompiler_object_inline_fontPreloads_1739 = new Set(),
-    JSCompiler_object_inline_highImagePreloads_1740 = new Set(),
-    JSCompiler_object_inline_styles_1741 = new Map(),
-    JSCompiler_object_inline_bootstrapScripts_1742 = new Set(),
-    JSCompiler_object_inline_scripts_1743 = new Set(),
-    JSCompiler_object_inline_bulkPreloads_1744 = new Set(),
-    JSCompiler_object_inline_preloads_1745 = {
+  var JSCompiler_object_inline_preconnects_1879 = new Set(),
+    JSCompiler_object_inline_fontPreloads_1880 = new Set(),
+    JSCompiler_object_inline_highImagePreloads_1881 = new Set(),
+    JSCompiler_object_inline_styles_1882 = new Map(),
+    JSCompiler_object_inline_bootstrapScripts_1883 = new Set(),
+    JSCompiler_object_inline_scripts_1884 = new Set(),
+    JSCompiler_object_inline_bulkPreloads_1885 = new Set(),
+    JSCompiler_object_inline_preloads_1886 = {
       images: new Map(),
       stylesheets: new Map(),
       scripts: new Map(),
@@ -2846,7 +3109,7 @@ function createRenderState(resumableState, generateStaticMarkup) {
       scriptConfig.moduleScriptResources[href] = null;
       scriptConfig = [];
       pushLinkImpl(scriptConfig, props);
-      JSCompiler_object_inline_bootstrapScripts_1742.add(scriptConfig);
+      JSCompiler_object_inline_bootstrapScripts_1883.add(scriptConfig);
       bootstrapChunks.push('<script src="', escapeTextForBrowser(src), '"');
       "string" === typeof integrity &&
         bootstrapChunks.push(
@@ -2893,7 +3156,7 @@ function createRenderState(resumableState, generateStaticMarkup) {
         (props.moduleScriptResources[scriptConfig] = null),
         (props = []),
         pushLinkImpl(props, integrity),
-        JSCompiler_object_inline_bootstrapScripts_1742.add(props),
+        JSCompiler_object_inline_bootstrapScripts_1883.add(props),
         bootstrapChunks.push(
           '<script type="module" src="',
           escapeTextForBrowser(i),
@@ -2915,7 +3178,7 @@ function createRenderState(resumableState, generateStaticMarkup) {
         bootstrapChunks.push(' async="">\x3c/script>');
   return {
     placeholderPrefix: bootstrapScriptContent,
-    segmentPrefix: JSCompiler_object_inline_segmentPrefix_1724,
+    segmentPrefix: JSCompiler_object_inline_segmentPrefix_1865,
     boundaryPrefix: idPrefix,
     startInlineScript: "<script",
     startInlineStyle: "<style",
@@ -2935,14 +3198,14 @@ function createRenderState(resumableState, generateStaticMarkup) {
     charsetChunks: [],
     viewportChunks: [],
     hoistableChunks: [],
-    preconnects: JSCompiler_object_inline_preconnects_1738,
-    fontPreloads: JSCompiler_object_inline_fontPreloads_1739,
-    highImagePreloads: JSCompiler_object_inline_highImagePreloads_1740,
-    styles: JSCompiler_object_inline_styles_1741,
-    bootstrapScripts: JSCompiler_object_inline_bootstrapScripts_1742,
-    scripts: JSCompiler_object_inline_scripts_1743,
-    bulkPreloads: JSCompiler_object_inline_bulkPreloads_1744,
-    preloads: JSCompiler_object_inline_preloads_1745,
+    preconnects: JSCompiler_object_inline_preconnects_1879,
+    fontPreloads: JSCompiler_object_inline_fontPreloads_1880,
+    highImagePreloads: JSCompiler_object_inline_highImagePreloads_1881,
+    styles: JSCompiler_object_inline_styles_1882,
+    bootstrapScripts: JSCompiler_object_inline_bootstrapScripts_1883,
+    scripts: JSCompiler_object_inline_scripts_1884,
+    bulkPreloads: JSCompiler_object_inline_bulkPreloads_1885,
+    preloads: JSCompiler_object_inline_preloads_1886,
     nonce: { script: void 0, style: void 0 },
     stylesToHoist: !1,
     generateStaticMarkup: generateStaticMarkup
@@ -3434,6 +3697,16 @@ function unwrapThenable(thenable) {
   null === thenableState && (thenableState = []);
   return trackUsedThenable(thenableState, thenable, index);
 }
+function readPreviousThenableFromState() {
+  var index = thenableIndexCounter;
+  thenableIndexCounter += 1;
+  if (null !== thenableState)
+    return (
+      (index = thenableState[index]),
+      (index = void 0 === index ? void 0 : index.value),
+      index
+    );
+}
 function unsupportedRefresh() {
   throw Error(formatProdErrorMessage(393));
 }
@@ -3833,6 +4106,7 @@ function RequestInstance(
   this.onShellReady = void 0 === onShellReady ? noop : onShellReady;
   this.onShellError = void 0 === onShellError ? noop : onShellError;
   this.onFatalError = void 0 === onFatalError ? noop : onFatalError;
+  this.renderLifetimeController = null;
   this.formState = void 0 === formState ? null : formState;
 }
 function createRequest(
@@ -4117,6 +4391,7 @@ function fatalError(request, error) {
     onFatalError = request.onFatalError;
   0 !== request.pendingRootTasks && onShellError(error);
   onFatalError(error);
+  endRenderLifetime(request);
   null !== request.destination
     ? ((request.status = 13), request.destination.destroy(error))
     : ((request.status = 12), request.aborted || (request.fatalError = error));
@@ -4357,9 +4632,9 @@ function renderElement(request, task, keyPath, type, props, ref) {
       var defaultProps = type.defaultProps;
       if (defaultProps) {
         newProps === props && (newProps = assign({}, newProps, props));
-        for (var propName$44 in defaultProps)
-          void 0 === newProps[propName$44] &&
-            (newProps[propName$44] = defaultProps[propName$44]);
+        for (var propName$47 in defaultProps)
+          void 0 === newProps[propName$47] &&
+            (newProps[propName$47] = defaultProps[propName$47]);
       }
       var JSCompiler_inline_result = newProps;
       var context = emptyContextObject,
@@ -4492,7 +4767,7 @@ function renderElement(request, task, keyPath, type, props, ref) {
       task.formatContext = prevContext;
       task.keyPath = prevKeyPath$jscomp$0;
     } else {
-      var children$41 = pushStartInstance(
+      var children$44 = pushStartInstance(
         segment.chunks,
         type,
         props,
@@ -4504,13 +4779,13 @@ function renderElement(request, task, keyPath, type, props, ref) {
         segment.lastPushedText
       );
       segment.lastPushedText = !1;
-      var prevContext$42 = task.formatContext,
-        prevKeyPath$43 = task.keyPath;
+      var prevContext$45 = task.formatContext,
+        prevKeyPath$46 = task.keyPath;
       task.keyPath = keyPath;
       if (
         3 ===
         (task.formatContext = getChildFormatContext(
-          prevContext$42,
+          prevContext$45,
           type,
           props
         )).insertionMode
@@ -4526,7 +4801,7 @@ function renderElement(request, task, keyPath, type, props, ref) {
         segment.preambleChildren.push(preambleSegment);
         task.blockedSegment = preambleSegment;
         try {
-          renderNode(request, task, children$41, -1),
+          renderNode(request, task, children$44, -1),
             pushSegmentFinale(
               preambleSegment.chunks,
               request.renderState,
@@ -4537,9 +4812,9 @@ function renderElement(request, task, keyPath, type, props, ref) {
         } finally {
           task.blockedSegment = segment;
         }
-      } else renderNode(request, task, children$41, -1);
-      task.formatContext = prevContext$42;
-      task.keyPath = prevKeyPath$43;
+      } else renderNode(request, task, children$44, -1);
+      task.formatContext = prevContext$45;
+      task.keyPath = prevKeyPath$46;
       a: {
         var target = segment.chunks,
           resumableState = request.resumableState;
@@ -4564,19 +4839,19 @@ function renderElement(request, task, keyPath, type, props, ref) {
           case "wbr":
             break a;
           case "body":
-            if (1 >= prevContext$42.insertionMode) {
+            if (1 >= prevContext$45.insertionMode) {
               resumableState.hasBody = !0;
               break a;
             }
             break;
           case "html":
-            if (0 === prevContext$42.insertionMode) {
+            if (0 === prevContext$45.insertionMode) {
               resumableState.hasHtml = !0;
               break a;
             }
             break;
           case "head":
-            if (1 >= prevContext$42.insertionMode) break a;
+            if (1 >= prevContext$45.insertionMode) break a;
         }
         target.push(endChunkForTag(type));
       }
@@ -4606,10 +4881,10 @@ function renderElement(request, task, keyPath, type, props, ref) {
           request.renderState.generateStaticMarkup ||
             segment$jscomp$0.chunks.push("\x3c!--&--\x3e");
           segment$jscomp$0.lastPushedText = !1;
-          var prevKeyPath$46 = task.keyPath;
+          var prevKeyPath$49 = task.keyPath;
           task.keyPath = keyPath;
           renderNode(request, task, props.children, -1);
-          task.keyPath = prevKeyPath$46;
+          task.keyPath = prevKeyPath$49;
           request.renderState.generateStaticMarkup ||
             segment$jscomp$0.chunks.push("\x3c!--/&--\x3e");
           segment$jscomp$0.lastPushedText = !1;
@@ -4649,9 +4924,49 @@ function renderElement(request, task, keyPath, type, props, ref) {
                 break a;
               }
             }
+            if ("function" === typeof children$jscomp$0[ASYNC_ITERATOR]) {
+              var iterator$40 = children$jscomp$0[ASYNC_ITERATOR]();
+              if (iterator$40) {
+                var prevThenableState = task.thenableState;
+                task.thenableState = null;
+                thenableIndexCounter = 0;
+                thenableState = prevThenableState;
+                var rows = [],
+                  done = !1;
+                if (iterator$40 === children$jscomp$0)
+                  for (
+                    var step$41 = readPreviousThenableFromState();
+                    void 0 !== step$41;
+
+                  ) {
+                    if (step$41.done) {
+                      done = !0;
+                      break;
+                    }
+                    rows.push(step$41.value);
+                    step$41 = readPreviousThenableFromState();
+                  }
+                if (!done)
+                  for (
+                    var step$42 = unwrapThenable(iterator$40.next());
+                    !step$42.done;
+
+                  )
+                    rows.push(step$42.value),
+                      (step$42 = unwrapThenable(iterator$40.next()));
+                renderSuspenseListRows(
+                  request,
+                  task,
+                  keyPath,
+                  rows,
+                  revealOrder
+                );
+                break a;
+              }
+            }
           }
           if ("together" === revealOrder) {
-            var prevKeyPath$40 = task.keyPath,
+            var prevKeyPath$43 = task.keyPath,
               prevRow = task.row,
               newRow = (task.row = createSuspenseListRow(null));
             newRow.boundaries = [];
@@ -4660,7 +4975,7 @@ function renderElement(request, task, keyPath, type, props, ref) {
             renderNodeDestructive(request, task, children$jscomp$0, -1);
             0 === --newRow.pendingTasks &&
               finishSuspenseListRow(request, newRow);
-            task.keyPath = prevKeyPath$40;
+            task.keyPath = prevKeyPath$43;
             task.row = prevRow;
             null !== prevRow &&
               0 < newRow.pendingTasks &&
@@ -4725,13 +5040,14 @@ function renderElement(request, task, keyPath, type, props, ref) {
             parentSegment = task.blockedSegment,
             fallback = props.fallback,
             content = props.children,
+            defer = !0 === props.defer,
             fallbackAbortSet = new Set(),
             newBoundary = createSuspenseBoundary(
               request,
               task.row,
               fallbackAbortSet,
               null,
-              !1
+              defer
             ),
             boundarySegment = createPendingSegment(
               request,
@@ -4753,7 +5069,7 @@ function renderElement(request, task, keyPath, type, props, ref) {
           );
           contentRootSegment.parentFlushed = !0;
           var trackedPostpones = request.trackedPostpones;
-          if (null !== trackedPostpones) {
+          if (null !== trackedPostpones || defer) {
             var suspenseComponentStack = task.componentStack,
               fallbackKeyPath = [keyPath[0], "Suspense Fallback", keyPath[2]];
             if (null !== trackedPostpones) {
@@ -5135,20 +5451,21 @@ function retryNode(request, task) {
                         previousReplaySet = task.replay,
                         parentBoundary = task.blockedBoundary,
                         parentHoistableState = task.hoistableState,
-                        content = props.children;
-                      props = props.fallback;
-                      var fallbackAbortSet = new Set(),
-                        resumedBoundary = createSuspenseBoundary(
-                          request,
-                          task.row,
-                          fallbackAbortSet,
-                          null,
-                          !1
-                        );
-                      resumedBoundary.parentFlushed = !0;
-                      resumedBoundary.rootSegmentID = replay;
-                      task.blockedBoundary = resumedBoundary;
-                      task.hoistableState = resumedBoundary.contentState;
+                        content = props.children,
+                        fallback = props.fallback,
+                        defer = !0 === props.defer;
+                      props = new Set();
+                      defer = createSuspenseBoundary(
+                        request,
+                        task.row,
+                        props,
+                        null,
+                        defer
+                      );
+                      defer.parentFlushed = !0;
+                      defer.rootSegmentID = replay;
+                      task.blockedBoundary = defer;
+                      task.hoistableState = defer.contentState;
                       task.keyPath = key;
                       task.formatContext = getSuspenseContentFormatContext(
                         request.resumableState,
@@ -5168,16 +5485,13 @@ function retryNode(request, task) {
                         )
                           throw Error(formatProdErrorMessage(488));
                         task.replay.pendingTasks--;
-                        if (
-                          0 === resumedBoundary.pendingTasks &&
-                          0 === resumedBoundary.status
-                        ) {
-                          resumedBoundary.status = 1;
-                          request.completedBoundaries.push(resumedBoundary);
+                        if (0 === defer.pendingTasks && 0 === defer.status) {
+                          defer.status = 1;
+                          request.completedBoundaries.push(defer);
                           break b;
                         }
                       } catch (thrownValue) {
-                        (resumedBoundary.status = 4),
+                        (defer.status = 4),
                           (childNodes = request.aborted
                             ? request.fatalError
                             : thrownValue),
@@ -5187,11 +5501,9 @@ function retryNode(request, task) {
                             childNodes,
                             childSlots
                           )),
-                          (resumedBoundary.errorDigest = currentNode),
+                          (defer.errorDigest = currentNode),
                           task.replay.pendingTasks--,
-                          request.clientRenderedBoundaries.push(
-                            resumedBoundary
-                          );
+                          request.clientRenderedBoundaries.push(defer);
                       } finally {
                         (task.blockedBoundary = parentBoundary),
                           (task.hoistableState = parentHoistableState),
@@ -5200,15 +5512,15 @@ function retryNode(request, task) {
                           (task.formatContext = prevContext),
                           (task.row = prevRow);
                       }
-                      childNodes = createReplayTask(
+                      task = createReplayTask(
                         request,
                         null,
                         { nodes: name, slots: node$jscomp$0, pendingTasks: 0 },
-                        props,
+                        fallback,
                         -1,
                         parentBoundary,
-                        resumedBoundary.fallbackState,
-                        fallbackAbortSet,
+                        defer.fallbackState,
+                        props,
                         [key[0], "Suspense Fallback", key[2]],
                         getSuspenseFallbackFormatContext(
                           request.resumableState,
@@ -5221,8 +5533,8 @@ function retryNode(request, task) {
                           task.componentStack
                         )
                       );
-                      pushComponentStack(childNodes);
-                      request.pingedTasks.push(childNodes);
+                      pushComponentStack(task);
+                      request.pingedTasks.push(task);
                     }
                   }
                   childIndex.splice(node, 1);
@@ -5256,6 +5568,32 @@ function retryNode(request, task) {
           }
           return;
         }
+      if (
+        "function" === typeof node[ASYNC_ITERATOR] &&
+        (childNodes = node[ASYNC_ITERATOR]())
+      ) {
+        childSlots = task.thenableState;
+        task.thenableState = null;
+        thenableIndexCounter = 0;
+        thenableState = childSlots;
+        childSlots = [];
+        currentNode = !1;
+        if (childNodes === node)
+          for (node = readPreviousThenableFromState(); void 0 !== node; ) {
+            if (node.done) {
+              currentNode = !0;
+              break;
+            }
+            childSlots.push(node.value);
+            node = readPreviousThenableFromState();
+          }
+        if (!currentNode)
+          for (node = unwrapThenable(childNodes.next()); !node.done; )
+            childSlots.push(node.value),
+              (node = unwrapThenable(childNodes.next()));
+        renderChildrenArray(request, task, childSlots, childIndex);
+        return;
+      }
       if ("function" === typeof node.then)
         return (
           (task.thenableState = null),
@@ -5588,21 +5926,21 @@ function renderNode(request, task, node, childIndex) {
       chunkLength = segment.chunks.length;
     try {
       return renderNodeDestructive(request, task, node, childIndex);
-    } catch (thrownValue$63) {
+    } catch (thrownValue$70) {
       if (
         (resetHooksState(),
         (segment.children.length = childrenLength),
         (segment.chunks.length = chunkLength),
         (node =
-          thrownValue$63 === SuspenseException
+          thrownValue$70 === SuspenseException
             ? getSuspendedThenable()
-            : thrownValue$63),
+            : thrownValue$70),
         !request.aborted && "object" === typeof node && null !== node)
       ) {
         if ("function" === typeof node.then) {
           segment = node;
           node =
-            thrownValue$63 === SuspenseException
+            thrownValue$70 === SuspenseException
               ? getThenableStateAfterSuspending()
               : null;
           request = spawnNewSuspendedRenderTask(request, task, node).ping;
@@ -5617,7 +5955,7 @@ function renderNode(request, task, node, childIndex) {
         }
         if ("Maximum call stack size exceeded" === node.message) {
           segment =
-            thrownValue$63 === SuspenseException
+            thrownValue$70 === SuspenseException
               ? getThenableStateAfterSuspending()
               : null;
           segment = spawnNewSuspendedRenderTask(request, task, segment);
@@ -5752,16 +6090,16 @@ function finishAbortedTask(task, request, error) {
           request.pendingRootTasks--,
           0 === request.pendingRootTasks && completeShell(request));
       } else {
-        var trackedPostpones$64 = request.trackedPostpones;
+        var trackedPostpones$71 = request.trackedPostpones;
         if (4 !== boundary.status) {
           if (
             !isRecoverableReason &&
-            null !== trackedPostpones$64 &&
+            null !== trackedPostpones$71 &&
             null !== segment
           )
             return (
               logRecoverableError(request, error, errorInfo),
-              trackPostpone(request, trackedPostpones$64, task, segment),
+              trackPostpone(request, trackedPostpones$71, task, segment),
               boundary.fallbackAbortableTasks.forEach(function (fallbackTask) {
                 return finishAbortedTask(fallbackTask, request, error);
               }),
@@ -6381,6 +6719,7 @@ function flushSegment(request, destination, segment, hoistableState) {
       ),
       hoistableState && hoistHoistables(hoistableState, boundary.fallbackState),
       flushSubtree(request, destination, segment, hoistableState),
+      destination.push("<?end>"),
       destination.push("\x3c!--/$--\x3e")
     );
   if (
@@ -6398,6 +6737,7 @@ function flushSegment(request, destination, segment, hoistableState) {
         boundary.rootSegmentID
       ),
       flushSubtree(request, destination, segment, hoistableState),
+      destination.push("<?end>"),
       destination.push("\x3c!--/$--\x3e")
     );
   flushedByteSize += boundary.byteSize;
@@ -6418,19 +6758,29 @@ function flushSegment(request, destination, segment, hoistableState) {
   return request;
 }
 function flushSegmentContainer(request, destination, segment, hoistableState) {
+  var forDeclarativeBoundary =
+      4 < arguments.length && void 0 !== arguments[4] ? arguments[4] : !1,
+    boundaryID = 5 < arguments.length ? arguments[5] : void 0;
   writeStartSegment(
     destination,
     request.renderState,
     segment.parentFormatContext,
-    segment.id
+    forDeclarativeBoundary ? boundaryID : segment.id,
+    forDeclarativeBoundary
   );
   flushSegment(request, destination, segment, hoistableState);
-  return writeEndSegment(destination, segment.parentFormatContext);
+  return writeEndSegment(
+    destination,
+    segment.parentFormatContext,
+    forDeclarativeBoundary
+  );
 }
 function flushCompletedBoundary(request, destination, boundary) {
   flushedByteSize = boundary.byteSize;
   for (
-    var completedSegments = boundary.completedSegments, i = 0;
+    var useDeclarative = !boundaryRequiresStyleInsertion(boundary.contentState),
+      completedSegments = boundary.completedSegments,
+      i = 0;
     i < completedSegments.length;
     i++
   )
@@ -6438,7 +6788,8 @@ function flushCompletedBoundary(request, destination, boundary) {
       request,
       destination,
       boundary,
-      completedSegments[i]
+      completedSegments[i],
+      useDeclarative
     );
   completedSegments.length = 0;
   completedSegments = boundary.row;
@@ -6451,62 +6802,21 @@ function flushCompletedBoundary(request, destination, boundary) {
     boundary.contentState,
     request.renderState
   );
-  completedSegments = request.resumableState;
-  request = request.renderState;
-  i = boundary.rootSegmentID;
-  boundary = boundary.contentState;
-  var requiresStyleInsertion = request.stylesToHoist,
-    requiresViewTransitions = 0 !== (completedSegments.instructions & 128);
-  request.stylesToHoist = !1;
-  destination.push(request.startInlineScript);
-  destination.push(">");
-  requiresStyleInsertion
-    ? (0 === (completedSegments.instructions & 4) &&
-        ((completedSegments.instructions |= 4),
-        destination.push(
-          '$RX=function(b,c,d,e,f){var a=document.getElementById(b);a&&(b=a.previousSibling,b.data="$!",a=a.dataset,null!=c&&(a.dgst=c),d&&(a.msg=d),e&&(a.stck=e),f&&(a.cstck=f),b._reactRetry&&b._reactRetry())};'
-        )),
-      0 === (completedSegments.instructions & 2) &&
-        ((completedSegments.instructions |= 2),
-        destination.push(
-          '$RB=[];$RV=function(a){$RT=performance.now();for(var b=0;b<a.length;b+=2){var c=a[b],e=a[b+1];null!==e.parentNode&&e.parentNode.removeChild(e);var f=c.parentNode;if(f){var g=c.previousSibling,h=0;do{if(c&&8===c.nodeType){var d=c.data;if("/$"===d||"/&"===d)if(0===h)break;else h--;else"$"!==d&&"$?"!==d&&"$~"!==d&&"$!"!==d&&"&"!==d||h++}d=c.nextSibling;f.removeChild(c);c=d}while(c);for(;e.firstChild;)f.insertBefore(e.firstChild,c);g.data="$";g._reactRetry&&requestAnimationFrame(g._reactRetry)}}a.length=0};\n$RC=function(a,b){if(b=document.getElementById(b))(a=document.getElementById(a))?(a.previousSibling.data="$~",$RB.push(a,b),2===$RB.length&&("number"!==typeof $RT?requestAnimationFrame($RV.bind(null,$RB)):(a=performance.now(),setTimeout($RV.bind(null,$RB),2300>a&&2E3<a?2300-a:$RT+300-a)))):b.parentNode.removeChild(b)};'
-        )),
-      requiresViewTransitions &&
-        0 === (completedSegments.instructions & 256) &&
-        ((completedSegments.instructions |= 256),
-        destination.push(
-          '$RV=function(B,g){function h(a,c){var e=a.getAttribute(c);e&&(c=a.style,l.push(a,c.viewTransitionName,c.viewTransitionClass),"auto"!==e&&(c.viewTransitionClass=e),(a=a.getAttribute("vt-name"))||(a="_T_"+N++ +"_"),a=CSS.escape(a)!==a?"r-"+btoa(a).replace(/=/g,""):a,c.viewTransitionName=a,C=!0)}var C=!1,N=0,l=[];try{var f=document.__reactViewTransition;if(f){f.finished.finally($RV.bind(null,g));return}var m=new Map;for(f=1;f<g.length;f+=2)for(var k=g[f].querySelectorAll("[vt-share]"),d=0;d<k.length;d++){var b=k[d];m.set(b.getAttribute("vt-name"),b)}var u=[];for(k=0;k<g.length;k+=2){var D=g[k],x=D.parentNode;if(x){var v=x.getBoundingClientRect();if(v.left||v.top||v.width||v.height){b=D;for(f=0;b;){if(8===b.nodeType){var t=b.data;if("/$"===t)if(0===f)break;else f--;else"$"!==t&&"$?"!==t&&"$~"!==t&&"$!"!==t||f++}else if(1===b.nodeType){d=b;var E=d.getAttribute("vt-name"),y=m.get(E);h(d,y?"vt-share":"vt-exit");y&&(h(y,"vt-share"),m.set(E,null));for(var F=d.querySelectorAll("[vt-share]"),\nz=0;z<F.length;z++){var G=F[z],H=G.getAttribute("vt-name"),I=m.get(H);I&&(h(G,"vt-share"),h(I,"vt-share"),m.set(H,null))}var J=d.querySelectorAll("[vt-parent-exit]");for(d=0;d<J.length;d++)h(J[d],"vt-parent-exit")}b=b.nextSibling}for(var K=g[k+1],n=K.firstElementChild;n;){null!==m.get(n.getAttribute("vt-name"))&&h(n,"vt-enter");var L=n.querySelectorAll("[vt-parent-enter]");for(b=0;b<L.length;b++)h(L[b],"vt-parent-enter");n=n.nextElementSibling}b=x;do for(var p=b.firstElementChild;p;){var M=p.getAttribute("vt-update");\nM&&"none"!==M&&!l.includes(p)&&h(p,"vt-update");p=p.nextElementSibling}while((b=b.parentNode)&&1===b.nodeType&&"none"!==b.getAttribute("vt-update"));u.push.apply(u,K.querySelectorAll(\'img[src]:not([loading="lazy"])\'))}}}if(C){var A=document.__reactViewTransition=document.startViewTransition({update:function(){B(g);for(var a=[document.documentElement.clientHeight,document.fonts.ready],c={},e=0;e<u.length;c={g:c.g},e++)if(c.g=u[e],!c.g.complete){var q=c.g.getBoundingClientRect();0<q.bottom&&0<q.right&&\nq.top<window.innerHeight&&q.left<window.innerWidth&&(q=new Promise(function(w){return function(r){w.g.addEventListener("load",r);w.g.addEventListener("error",r)}}(c)),a.push(q))}return Promise.race([Promise.all(a),new Promise(function(w){var r=performance.now();setTimeout(w,2300>r&&2E3<r?2300-r:500)})])},types:[]});A.ready.finally(function(){for(var a=l.length-3;0<=a;a-=3){var c=l[a],e=c.style;e.viewTransitionName=l[a+1];e.viewTransitionClass=l[a+1];""===c.getAttribute("style")&&c.removeAttribute("style")}});\nA.finished.finally(function(){document.__reactViewTransition===A&&(document.__reactViewTransition=null)});$RB=[];return}}catch(a){}B(g)}.bind(null,$RV);'
-        )),
-      0 === (completedSegments.instructions & 8)
-        ? ((completedSegments.instructions |= 8),
-          destination.push(
-            '$RM=new Map;$RR=function(n,w,p){function u(q){this._p=null;q()}for(var r=new Map,t=document,h,b,e=t.querySelectorAll("link[data-precedence],style[data-precedence]"),v=[],k=0;b=e[k++];)"not all"===b.getAttribute("media")?v.push(b):("LINK"===b.tagName&&$RM.set(b.getAttribute("href"),b),r.set(b.dataset.precedence,h=b));e=0;b=[];var l,a;for(k=!0;;){if(k){var f=p[e++];if(!f){k=!1;e=0;continue}var c=!1,m=0;var d=f[m++];if(a=$RM.get(d)){var g=a._p;c=!0}else{a=t.createElement("link");a.href=d;a.rel=\n"stylesheet";for(a.dataset.precedence=l=f[m++];g=f[m++];)a.setAttribute(g,f[m++]);g=a._p=new Promise(function(q,x){a.onload=u.bind(a,q);a.onerror=u.bind(a,x)});$RM.set(d,a)}d=a.getAttribute("media");!g||d&&!matchMedia(d).matches||b.push(g);if(c)continue}else{a=v[e++];if(!a)break;l=a.getAttribute("data-precedence");a.removeAttribute("media")}c=r.get(l)||h;c===h&&(h=a);r.set(l,a);c?c.parentNode.insertBefore(a,c.nextSibling):(c=t.head,c.insertBefore(a,c.firstChild))}if(p=document.getElementById(n))p.previousSibling.data=\n"$~";Promise.all(b).then($RC.bind(null,n,w),$RX.bind(null,n,"CSS failed to load"))};$RR("'
-          ))
-        : destination.push('$RR("'))
-    : (0 === (completedSegments.instructions & 2) &&
-        ((completedSegments.instructions |= 2),
-        destination.push(
-          '$RB=[];$RV=function(a){$RT=performance.now();for(var b=0;b<a.length;b+=2){var c=a[b],e=a[b+1];null!==e.parentNode&&e.parentNode.removeChild(e);var f=c.parentNode;if(f){var g=c.previousSibling,h=0;do{if(c&&8===c.nodeType){var d=c.data;if("/$"===d||"/&"===d)if(0===h)break;else h--;else"$"!==d&&"$?"!==d&&"$~"!==d&&"$!"!==d&&"&"!==d||h++}d=c.nextSibling;f.removeChild(c);c=d}while(c);for(;e.firstChild;)f.insertBefore(e.firstChild,c);g.data="$";g._reactRetry&&requestAnimationFrame(g._reactRetry)}}a.length=0};\n$RC=function(a,b){if(b=document.getElementById(b))(a=document.getElementById(a))?(a.previousSibling.data="$~",$RB.push(a,b),2===$RB.length&&("number"!==typeof $RT?requestAnimationFrame($RV.bind(null,$RB)):(a=performance.now(),setTimeout($RV.bind(null,$RB),2300>a&&2E3<a?2300-a:$RT+300-a)))):b.parentNode.removeChild(b)};'
-        )),
-      requiresViewTransitions &&
-        0 === (completedSegments.instructions & 256) &&
-        ((completedSegments.instructions |= 256),
-        destination.push(
-          '$RV=function(B,g){function h(a,c){var e=a.getAttribute(c);e&&(c=a.style,l.push(a,c.viewTransitionName,c.viewTransitionClass),"auto"!==e&&(c.viewTransitionClass=e),(a=a.getAttribute("vt-name"))||(a="_T_"+N++ +"_"),a=CSS.escape(a)!==a?"r-"+btoa(a).replace(/=/g,""):a,c.viewTransitionName=a,C=!0)}var C=!1,N=0,l=[];try{var f=document.__reactViewTransition;if(f){f.finished.finally($RV.bind(null,g));return}var m=new Map;for(f=1;f<g.length;f+=2)for(var k=g[f].querySelectorAll("[vt-share]"),d=0;d<k.length;d++){var b=k[d];m.set(b.getAttribute("vt-name"),b)}var u=[];for(k=0;k<g.length;k+=2){var D=g[k],x=D.parentNode;if(x){var v=x.getBoundingClientRect();if(v.left||v.top||v.width||v.height){b=D;for(f=0;b;){if(8===b.nodeType){var t=b.data;if("/$"===t)if(0===f)break;else f--;else"$"!==t&&"$?"!==t&&"$~"!==t&&"$!"!==t||f++}else if(1===b.nodeType){d=b;var E=d.getAttribute("vt-name"),y=m.get(E);h(d,y?"vt-share":"vt-exit");y&&(h(y,"vt-share"),m.set(E,null));for(var F=d.querySelectorAll("[vt-share]"),\nz=0;z<F.length;z++){var G=F[z],H=G.getAttribute("vt-name"),I=m.get(H);I&&(h(G,"vt-share"),h(I,"vt-share"),m.set(H,null))}var J=d.querySelectorAll("[vt-parent-exit]");for(d=0;d<J.length;d++)h(J[d],"vt-parent-exit")}b=b.nextSibling}for(var K=g[k+1],n=K.firstElementChild;n;){null!==m.get(n.getAttribute("vt-name"))&&h(n,"vt-enter");var L=n.querySelectorAll("[vt-parent-enter]");for(b=0;b<L.length;b++)h(L[b],"vt-parent-enter");n=n.nextElementSibling}b=x;do for(var p=b.firstElementChild;p;){var M=p.getAttribute("vt-update");\nM&&"none"!==M&&!l.includes(p)&&h(p,"vt-update");p=p.nextElementSibling}while((b=b.parentNode)&&1===b.nodeType&&"none"!==b.getAttribute("vt-update"));u.push.apply(u,K.querySelectorAll(\'img[src]:not([loading="lazy"])\'))}}}if(C){var A=document.__reactViewTransition=document.startViewTransition({update:function(){B(g);for(var a=[document.documentElement.clientHeight,document.fonts.ready],c={},e=0;e<u.length;c={g:c.g},e++)if(c.g=u[e],!c.g.complete){var q=c.g.getBoundingClientRect();0<q.bottom&&0<q.right&&\nq.top<window.innerHeight&&q.left<window.innerWidth&&(q=new Promise(function(w){return function(r){w.g.addEventListener("load",r);w.g.addEventListener("error",r)}}(c)),a.push(q))}return Promise.race([Promise.all(a),new Promise(function(w){var r=performance.now();setTimeout(w,2300>r&&2E3<r?2300-r:500)})])},types:[]});A.ready.finally(function(){for(var a=l.length-3;0<=a;a-=3){var c=l[a],e=c.style;e.viewTransitionName=l[a+1];e.viewTransitionClass=l[a+1];""===c.getAttribute("style")&&c.removeAttribute("style")}});\nA.finished.finally(function(){document.__reactViewTransition===A&&(document.__reactViewTransition=null)});$RB=[];return}}catch(a){}B(g)}.bind(null,$RV);'
-        )),
-      destination.push('$RC("'));
-  completedSegments = i.toString(16);
-  destination.push(request.boundaryPrefix);
-  destination.push(completedSegments);
-  destination.push('","');
-  destination.push(request.segmentPrefix);
-  destination.push(completedSegments);
-  requiresStyleInsertion
-    ? (destination.push('",'),
-      writeStyleResourceDependenciesInJS(destination, boundary))
-    : destination.push('"');
-  boundary = destination.push(")\x3c/script>");
-  return writeBootstrap(destination, request) && boundary;
+  return useDeclarative
+    ? writeCompletedBoundaryInstruction(
+        destination,
+        request.resumableState,
+        request.renderState,
+        boundary.rootSegmentID,
+        null
+      )
+    : writeCompletedBoundaryInstruction(
+        destination,
+        request.resumableState,
+        request.renderState,
+        boundary.rootSegmentID,
+        boundary.contentState
+      );
 }
 function flushPartiallyCompletedSegment(
   request,
@@ -6514,35 +6824,59 @@ function flushPartiallyCompletedSegment(
   boundary,
   segment
 ) {
+  var useDeclarative =
+    4 < arguments.length && void 0 !== arguments[4] ? arguments[4] : !1;
   if (2 === segment.status) return !0;
   var hoistableState = boundary.contentState,
     segmentID = segment.id;
   if (-1 === segmentID) {
-    if (-1 === (segment.id = boundary.rootSegmentID))
-      throw Error(formatProdErrorMessage(392));
-    return flushSegmentContainer(request, destination, segment, hoistableState);
+    segmentID = segment.id = boundary.rootSegmentID;
+    if (-1 === segmentID) throw Error(formatProdErrorMessage(392));
+    return useDeclarative
+      ? flushSegmentContainer(
+          request,
+          destination,
+          segment,
+          hoistableState,
+          !0,
+          segmentID
+        )
+      : flushSegmentContainer(request, destination, segment, hoistableState);
   }
   if (segmentID === boundary.rootSegmentID)
-    return flushSegmentContainer(request, destination, segment, hoistableState);
+    return useDeclarative
+      ? flushSegmentContainer(
+          request,
+          destination,
+          segment,
+          hoistableState,
+          !0,
+          segmentID
+        )
+      : flushSegmentContainer(request, destination, segment, hoistableState);
   flushSegmentContainer(request, destination, segment, hoistableState);
-  boundary = request.resumableState;
-  request = request.renderState;
-  destination.push(request.startInlineScript);
-  destination.push(">");
-  0 === (boundary.instructions & 1)
-    ? ((boundary.instructions |= 1),
-      destination.push(
-        '$RS=function(a,b){a=document.getElementById(a);b=document.getElementById(b);for(a.parentNode.removeChild(a);a.firstChild;)b.parentNode.insertBefore(a.firstChild,b);b.parentNode.removeChild(b)};$RS("'
-      ))
-    : destination.push('$RS("');
-  destination.push(request.segmentPrefix);
+  var resumableState = request.resumableState;
+  useDeclarative = request.renderState;
+  (hoistableState = 0 === resumableState.streamingFormat)
+    ? (destination.push(useDeclarative.startInlineScript),
+      destination.push(">"),
+      0 === (resumableState.instructions & 1)
+        ? ((resumableState.instructions |= 1),
+          destination.push(
+            '$RS=function(a,b){a=document.getElementById(a);b=document.getElementById(b);for(a.parentNode.removeChild(a);a.firstChild;)b.parentNode.insertBefore(a.firstChild,b);b.parentNode.removeChild(b)};$RS("'
+          ))
+        : destination.push('$RS("'))
+    : destination.push('<template data-rsi="" data-sid="');
+  destination.push(useDeclarative.segmentPrefix);
   segmentID = segmentID.toString(16);
   destination.push(segmentID);
-  destination.push('","');
-  destination.push(request.placeholderPrefix);
+  hoistableState ? destination.push('","') : destination.push('" data-pid="');
+  destination.push(useDeclarative.placeholderPrefix);
   destination.push(segmentID);
-  destination = destination.push('")\x3c/script>');
-  return destination;
+  segmentID = hoistableState
+    ? destination.push('")\x3c/script>')
+    : destination.push('"></template>');
+  return segmentID;
 }
 var flushingPartialBoundaries = !1;
 function flushCompletedQueues(request, destination) {
@@ -6555,9 +6889,24 @@ function flushCompletedQueues(request, destination) {
         var completedPreambleSegments = request.completedPreambleSegments;
         if (null === completedPreambleSegments) return;
         flushedByteSize = request.byteSize;
+        var blockingRenderMaxSize = 40 * request.progressiveChunkSize;
+        if (flushedByteSize > blockingRenderMaxSize) {
+          var error = Error(
+            formatProdErrorMessage(561, Math.round(blockingRenderMaxSize / 1e3))
+          );
+          logRecoverableError(request, error, {}, null);
+        }
         var resumableState = request.resumableState,
-          renderState = request.renderState,
-          preamble = renderState.preamble,
+          renderState = request.renderState;
+        if (renderState.externalRuntimeScript) {
+          var _renderState$external = renderState.externalRuntimeScript,
+            src = _renderState$external.src,
+            chunks = _renderState$external.chunks;
+          resumableState.scriptResources.hasOwnProperty(src) ||
+            ((resumableState.scriptResources[src] = null),
+            renderState.scripts.add(chunks));
+        }
+        var preamble = renderState.preamble,
           htmlChunks = preamble.htmlChunks,
           headChunks = preamble.headChunks,
           i$jscomp$0;
@@ -6606,13 +6955,13 @@ function flushCompletedQueues(request, destination) {
         for (i$jscomp$0 = 0; i$jscomp$0 < hoistableChunks.length; i$jscomp$0++)
           destination.push(hoistableChunks[i$jscomp$0]);
         for (
-          resumableState = hoistableChunks.length = 0;
-          resumableState < completedPreambleSegments.length;
-          resumableState++
+          blockingRenderMaxSize = hoistableChunks.length = 0;
+          blockingRenderMaxSize < completedPreambleSegments.length;
+          blockingRenderMaxSize++
         ) {
-          var segments = completedPreambleSegments[resumableState];
-          for (renderState = 0; renderState < segments.length; renderState++)
-            flushSegment(request, destination, segments[renderState], null);
+          var segments = completedPreambleSegments[blockingRenderMaxSize];
+          for (error = 0; error < segments.length; error++)
+            flushSegment(request, destination, segments[error], null);
         }
         var preamble$jscomp$0 = request.renderState.preamble,
           headChunks$jscomp$0 = preamble$jscomp$0.headChunks;
@@ -6630,33 +6979,35 @@ function flushCompletedQueues(request, destination) {
             destination.push(bodyChunks[completedPreambleSegments]);
         flushSegment(request, destination, completedRootSegment, null);
         request.completedRootSegment = null;
-        var renderState$jscomp$0 = request.renderState;
+        var resumableState$jscomp$0 = request.resumableState,
+          renderState$jscomp$0 = request.renderState;
+        (0 === request.allPendingTasks &&
+          0 === request.clientRenderedBoundaries.length &&
+          0 === request.completedBoundaries.length &&
+          (null === request.trackedPostpones ||
+            (0 === request.trackedPostpones.rootNodes.length &&
+              null === request.trackedPostpones.rootSlots))) ||
+          0 !== resumableState$jscomp$0.streamingFormat ||
+          0 !== (resumableState$jscomp$0.instructions & 64) ||
+          ((resumableState$jscomp$0.instructions |= 64),
+          destination.push(renderState$jscomp$0.startInlineScript),
+          writeCompletedShellIdAttribute(destination, resumableState$jscomp$0),
+          destination.push(">"),
+          destination.push(
+            "requestAnimationFrame(function(){$RT=performance.now()});"
+          ),
+          destination.push("\x3c/script>"));
+        var preamble$jscomp$1 = renderState$jscomp$0.preamble;
         if (
-          0 !== request.allPendingTasks ||
-          0 !== request.clientRenderedBoundaries.length ||
-          0 !== request.completedBoundaries.length ||
-          (null !== request.trackedPostpones &&
-            (0 !== request.trackedPostpones.rootNodes.length ||
-              null !== request.trackedPostpones.rootSlots))
+          (preamble$jscomp$1.htmlChunks || preamble$jscomp$1.headChunks) &&
+          0 === (resumableState$jscomp$0.instructions & 32)
         ) {
-          var resumableState$jscomp$0 = request.resumableState;
-          if (0 === (resumableState$jscomp$0.instructions & 64)) {
-            resumableState$jscomp$0.instructions |= 64;
-            destination.push(renderState$jscomp$0.startInlineScript);
-            if (0 === (resumableState$jscomp$0.instructions & 32)) {
-              resumableState$jscomp$0.instructions |= 32;
-              var shellId = "_" + resumableState$jscomp$0.idPrefix + "R_";
-              destination.push(' id="');
-              var chunk$jscomp$1 = escapeTextForBrowser(shellId);
-              destination.push(chunk$jscomp$1);
-              destination.push('"');
-            }
-            destination.push(">");
-            destination.push(
-              "requestAnimationFrame(function(){$RT=performance.now()});"
-            );
-            destination.push("\x3c/script>");
-          }
+          var chunk$jscomp$1 = startChunkForTag("template");
+          destination.push(chunk$jscomp$1);
+          writeCompletedShellIdAttribute(destination, resumableState$jscomp$0);
+          destination.push(">");
+          var chunk$jscomp$2 = endChunkForTag("template");
+          destination.push(chunk$jscomp$2);
         }
         writeBootstrap(destination, renderState$jscomp$0);
       }
@@ -6699,29 +7050,39 @@ function flushCompletedQueues(request, destination) {
         var resumableState$jscomp$1 = request.resumableState,
           renderState$jscomp$2 = request.renderState,
           id = boundary.rootSegmentID,
-          errorDigest = boundary.errorDigest;
-        renderState$jscomp$1.push(renderState$jscomp$2.startInlineScript);
-        renderState$jscomp$1.push(">");
-        0 === (resumableState$jscomp$1.instructions & 4)
-          ? ((resumableState$jscomp$1.instructions |= 4),
-            renderState$jscomp$1.push(
-              '$RX=function(b,c,d,e,f){var a=document.getElementById(b);a&&(b=a.previousSibling,b.data="$!",a=a.dataset,null!=c&&(a.dgst=c),d&&(a.msg=d),e&&(a.stck=e),f&&(a.cstck=f),b._reactRetry&&b._reactRetry())};;$RX("'
-            ))
-          : renderState$jscomp$1.push('$RX("');
+          errorDigest = boundary.errorDigest,
+          scriptFormat = 0 === resumableState$jscomp$1.streamingFormat;
+        scriptFormat
+          ? (renderState$jscomp$1.push(renderState$jscomp$2.startInlineScript),
+            renderState$jscomp$1.push(">"),
+            0 === (resumableState$jscomp$1.instructions & 4)
+              ? ((resumableState$jscomp$1.instructions |= 4),
+                renderState$jscomp$1.push(
+                  '$RX=function(d,e,f,g,h){var c,b=document.getElementById(d);if(!b)a:{b=document;for(b=b.createTreeWalker(b.documentElement||b,NodeFilter.SHOW_PROCESSING_INSTRUCTION|NodeFilter.SHOW_COMMENT);c=b.nextNode();)if(7===c.nodeType){var a;if(a="start"===c.target)a=c,a="function"===typeof a.getAttribute?a.getAttribute("name"):(a=(a.data||a.nodeValue||"").match(/(?:^|\\s)name=["\']([^"\']+)["\']/))?a[1]:null,a=a===d;if(a){b=c;break a}}else{if(a=8===c.nodeType)a=c.data,"string"!==typeof a||63!==a.charCodeAt(0)?a=!1:(a=a.match(/^\\?([^\\s]+)\\s+name=["\']([^"\']+)["\']/),a=null!=a&&"start"===a[1]&&a[2]===d);if(a){b=c;break a}}b=null}if(c=b)b=c.previousSibling,b.data="$!",a=c,1!==c.nodeType&&(a=b.ownerDocument.createElement("template"),a.id=d,b.parentNode.insertBefore(a,c)),d=a.dataset,null!=e&&(d.dgst=e),f&&(d.msg=f),g&&(d.stck=g),h&&(d.cstck=h),b._reactRetry&&b._reactRetry()};;$RX("'
+                ))
+              : renderState$jscomp$1.push('$RX("'))
+          : renderState$jscomp$1.push('<template data-rxi="" data-bid="');
         renderState$jscomp$1.push(renderState$jscomp$2.boundaryPrefix);
-        var chunk$jscomp$2 = id.toString(16);
-        renderState$jscomp$1.push(chunk$jscomp$2);
-        renderState$jscomp$1.push('"');
+        var chunk$jscomp$3 = id.toString(16);
+        renderState$jscomp$1.push(chunk$jscomp$3);
+        scriptFormat && renderState$jscomp$1.push('"');
         if (null != errorDigest)
-          if ((renderState$jscomp$1.push(","), null == errorDigest))
-            renderState$jscomp$1.push("null");
-          else {
-            var chunk$jscomp$3 =
-              escapeJSStringsForInstructionScripts(errorDigest);
-            renderState$jscomp$1.push(chunk$jscomp$3);
+          if (scriptFormat)
+            if ((renderState$jscomp$1.push(","), null == errorDigest))
+              renderState$jscomp$1.push("null");
+            else {
+              var chunk$jscomp$4 =
+                escapeJSStringsForInstructionScripts(errorDigest);
+              renderState$jscomp$1.push(chunk$jscomp$4);
+            }
+          else if (null != errorDigest) {
+            renderState$jscomp$1.push('" data-dgst="');
+            var chunk$jscomp$5 = escapeTextForBrowser(errorDigest);
+            renderState$jscomp$1.push(chunk$jscomp$5);
           }
-        var JSCompiler_inline_result =
-          renderState$jscomp$1.push(")\x3c/script>");
+        var JSCompiler_inline_result = scriptFormat
+          ? renderState$jscomp$1.push(")\x3c/script>")
+          : renderState$jscomp$1.push('"></template>');
         if (!JSCompiler_inline_result) {
           request.destination = null;
           i++;
@@ -6743,56 +7104,19 @@ function flushCompletedQueues(request, destination) {
       completedBoundaries.splice(0, i);
       flushingPartialBoundaries = !0;
       var partialBoundaries = request.partialBoundaries;
-      for (i = 0; i < partialBoundaries.length; i++) {
-        var boundary$70 = partialBoundaries[i];
-        a: {
-          clientRenderedBoundaries = request;
-          boundary = destination;
-          flushedByteSize = boundary$70.byteSize;
-          var completedSegments = boundary$70.completedSegments;
-          for (
-            JSCompiler_inline_result = 0;
-            JSCompiler_inline_result < completedSegments.length;
-            JSCompiler_inline_result++
+      for (i = 0; i < partialBoundaries.length; i++)
+        if (
+          !writeHoistablesForBoundary(
+            destination,
+            partialBoundaries[i].contentState,
+            request.renderState
           )
-            if (
-              !flushPartiallyCompletedSegment(
-                clientRenderedBoundaries,
-                boundary,
-                boundary$70,
-                completedSegments[JSCompiler_inline_result]
-              )
-            ) {
-              JSCompiler_inline_result++;
-              completedSegments.splice(0, JSCompiler_inline_result);
-              var JSCompiler_inline_result$jscomp$0 = !1;
-              break a;
-            }
-          completedSegments.splice(0, JSCompiler_inline_result);
-          var row = boundary$70.row;
-          null !== row &&
-            row.together &&
-            1 === boundary$70.pendingTasks &&
-            (1 === row.pendingTasks
-              ? unblockSuspenseListRow(
-                  clientRenderedBoundaries,
-                  row,
-                  row.hoistables
-                )
-              : row.pendingTasks--);
-          JSCompiler_inline_result$jscomp$0 = writeHoistablesForBoundary(
-            boundary,
-            boundary$70.contentState,
-            clientRenderedBoundaries.renderState
-          );
-        }
-        if (!JSCompiler_inline_result$jscomp$0) {
+        ) {
           request.destination = null;
           i++;
           partialBoundaries.splice(0, i);
           return;
         }
-      }
       partialBoundaries.splice(0, i);
       flushingPartialBoundaries = !1;
       var largeBoundaries = request.completedBoundaries;
@@ -6815,9 +7139,10 @@ function flushCompletedQueues(request, destination) {
         ((request.flushScheduled = !1),
         (i = request.resumableState),
         i.hasBody &&
-          ((partialBoundaries = endChunkForTag("body")),
-          destination.push(partialBoundaries)),
+          ((clientRenderedBoundaries = endChunkForTag("body")),
+          destination.push(clientRenderedBoundaries)),
         i.hasHtml && ((i = endChunkForTag("html")), destination.push(i)),
+        endRenderLifetime(request),
         (request.status = 13),
         destination.push(null),
         (request.destination = null));
@@ -6847,8 +7172,8 @@ function startFlowing(request, destination) {
     request.destination = destination;
     try {
       flushCompletedQueues(request, destination);
-    } catch (error$72) {
-      logRecoverableError(request, error$72, {}), fatalError(request, error$72);
+    } catch (error$79) {
+      logRecoverableError(request, error$79, {}), fatalError(request, error$79);
     }
   }
 }
@@ -6863,12 +7188,17 @@ function finishAbort(request, abortableTasks) {
     }
     null !== request.destination &&
       flushCompletedQueues(request, request.destination);
-  } catch (error$73) {
-    logRecoverableError(request, error$73, {}), fatalError(request, error$73);
+  } catch (error$80) {
+    logRecoverableError(request, error$80, {}), fatalError(request, error$80);
   }
+}
+function endRenderLifetime(request) {
+  request = request.renderLifetimeController;
+  null !== request && request.abort("The render ended.");
 }
 function abort(request, reason) {
   if (!(request.aborted || (11 !== request.status && 10 !== request.status))) {
+    endRenderLifetime(request);
     var isRecoverableReason =
       "object" === typeof reason &&
       null !== reason &&
@@ -6914,7 +7244,10 @@ function renderToStringImpl(
     fatalError = null,
     result = "",
     readyToStream = !1;
-  options = createResumableState(options ? options.identifierPrefix : void 0);
+  options = createResumableState(
+    options ? options.identifierPrefix : void 0,
+    void 0
+  );
   children = createRequest(
     children,
     options,
@@ -6967,4 +7300,4 @@ exports.renderToString = function (children, options) {
     'The server used "renderToString" which does not support Suspense. If you intended for this Suspense boundary to render the fallback content on the server consider throwing an Error somewhere within the Suspense boundary. If you intended to have the server wait for the suspended component please switch to "renderToReadableStream" which supports Suspense on the server'
   );
 };
-exports.version = "19.3.0-canary-eafeac09-20260819";
+exports.version = "19.3.0-experimental-7d0495dd-20260824";

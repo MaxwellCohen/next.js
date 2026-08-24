@@ -17071,6 +17071,9 @@ function estimateBandwidth() {
     ? count
     : 5;
 }
+function isSuspensePendingStartData(data) {
+  return 36 === data.charCodeAt(0) && 63 === data.charCodeAt(1);
+}
 var eventsEnabled = null,
   selectionInformation = null;
 function getOwnerDocumentFromRootContainer(rootContainerElement) {
@@ -17178,7 +17181,7 @@ function clearHydrationBoundary(parentInstance, hydrationInstance) {
         depth--;
       } else if (
         "$" === node ||
-        "$?" === node ||
+        isSuspensePendingStartData(node) ||
         "$~" === node ||
         "$!" === node ||
         "&" === node
@@ -17229,7 +17232,10 @@ function hideOrUnhideDehydratedBoundary(suspenseInstance, isHidden) {
         if (0 === suspenseInstance) break;
         else suspenseInstance--;
       else
-        ("$" !== node && "$?" !== node && "$~" !== node && "$!" !== node) ||
+        ("$" === node ||
+          isSuspensePendingStartData(node) ||
+          "$~" === node ||
+          "$!" === node) &&
           suspenseInstance++;
     node = nextNode;
   } while (node);
@@ -18603,27 +18609,29 @@ function canHydrateHydrationBoundary(instance, inRootOrSingleton) {
   return instance;
 }
 function isSuspenseInstancePending(instance) {
-  return "$?" === instance.data || "$~" === instance.data;
+  return isSuspensePendingStartData(instance.data) || "$~" === instance.data;
 }
 function isSuspenseInstanceFallback(instance) {
   return (
     "$!" === instance.data ||
-    ("$?" === instance.data && "loading" !== instance.ownerDocument.readyState)
+    (isSuspensePendingStartData(instance.data) &&
+      "loading" !== instance.ownerDocument.readyState)
   );
 }
 function registerSuspenseInstanceRetry(instance, callback) {
   var ownerDocument = instance.ownerDocument;
   if ("$~" === instance.data) instance._reactRetry = callback;
-  else if ("$?" !== instance.data || "loading" !== ownerDocument.readyState)
-    callback();
-  else {
+  else if (
+    isSuspensePendingStartData(instance.data) &&
+    "loading" === ownerDocument.readyState
+  ) {
     var listener = function () {
       callback();
       ownerDocument.removeEventListener("DOMContentLoaded", listener);
     };
     ownerDocument.addEventListener("DOMContentLoaded", listener);
     instance._reactRetry = listener;
-  }
+  } else callback();
 }
 function getNextHydratable(node) {
   for (; null != node; node = node.nextSibling) {
@@ -18634,7 +18642,7 @@ function getNextHydratable(node) {
       if (
         "$" === nodeType ||
         "$!" === nodeType ||
-        "$?" === nodeType ||
+        isSuspensePendingStartData(nodeType) ||
         "$~" === nodeType ||
         "&" === nodeType ||
         "F!" === nodeType ||
@@ -18657,11 +18665,11 @@ function getNextHydratableInstanceAfterHydrationBoundary(hydrationInstance) {
           return getNextHydratable(hydrationInstance.nextSibling);
         depth--;
       } else
-        ("$" !== data &&
-          "$!" !== data &&
-          "$?" !== data &&
-          "$~" !== data &&
-          "&" !== data) ||
+        ("$" === data ||
+          "$!" === data ||
+          isSuspensePendingStartData(data) ||
+          "$~" === data ||
+          "&" === data) &&
           depth++;
     }
     hydrationInstance = hydrationInstance.nextSibling;
@@ -18676,7 +18684,7 @@ function getParentHydrationBoundary(targetInstance) {
       if (
         "$" === data ||
         "$!" === data ||
-        "$?" === data ||
+        isSuspensePendingStartData(data) ||
         "$~" === data ||
         "&" === data
       ) {
@@ -20362,14 +20370,14 @@ ReactDOMHydrationRoot.prototype.unstable_scheduleHydration = function (target) {
 };
 var isomorphicReactPackageVersion$jscomp$inline_2233 = React.version;
 if (
-  "19.3.0-experimental-eafeac09-20260819" !==
+  "19.3.0-experimental-7d0495dd-20260824" !==
   isomorphicReactPackageVersion$jscomp$inline_2233
 )
   throw Error(
     formatProdErrorMessage(
       527,
       isomorphicReactPackageVersion$jscomp$inline_2233,
-      "19.3.0-experimental-eafeac09-20260819"
+      "19.3.0-experimental-7d0495dd-20260824"
     )
   );
 ReactDOMSharedInternals.findDOMNode = function (componentOrElement) {
@@ -20391,10 +20399,10 @@ ReactDOMSharedInternals.findDOMNode = function (componentOrElement) {
 };
 var internals$jscomp$inline_2889 = {
   bundleType: 0,
-  version: "19.3.0-experimental-eafeac09-20260819",
+  version: "19.3.0-experimental-7d0495dd-20260824",
   rendererPackageName: "react-dom",
   currentDispatcherRef: ReactSharedInternals,
-  reconcilerVersion: "19.3.0-experimental-eafeac09-20260819"
+  reconcilerVersion: "19.3.0-experimental-7d0495dd-20260824"
 };
 if ("undefined" !== typeof __REACT_DEVTOOLS_GLOBAL_HOOK__) {
   var hook$jscomp$inline_2890 = __REACT_DEVTOOLS_GLOBAL_HOOK__;
@@ -20501,4 +20509,4 @@ exports.hydrateRoot = function (container, initialChildren, options) {
   listenToAllSupportedEvents(container);
   return new ReactDOMHydrationRoot(initialChildren);
 };
-exports.version = "19.3.0-experimental-eafeac09-20260819";
+exports.version = "19.3.0-experimental-7d0495dd-20260824";

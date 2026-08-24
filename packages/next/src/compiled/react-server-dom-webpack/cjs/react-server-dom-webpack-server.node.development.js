@@ -1079,6 +1079,22 @@
       }
       return JSCompiler_inline_result$jscomp$0;
     }
+    function throwTaintViolation(message) {
+      throw Error(message);
+    }
+    function cleanupTaintQueue(request) {
+      request = request.taintCleanupQueue;
+      TaintRegistryPendingRequests.delete(request);
+      for (var i = 0; i < request.length; i++) {
+        var entryValue = request[i],
+          entry = TaintRegistryValues.get(entryValue);
+        void 0 !== entry &&
+          (1 === entry.count
+            ? TaintRegistryValues.delete(entryValue)
+            : entry.count--);
+      }
+      request.length = 0;
+    }
     function defaultErrorHandler(error) {
       console.error(error);
     }
@@ -1107,7 +1123,9 @@
       ReactSharedInternalsServer.getCurrentStack = getCurrentStackInDEV;
       var abortSet = new Set(),
         pingedTasks = [],
-        hints = new Set();
+        cleanupQueue = [];
+      TaintRegistryPendingRequests.add(cleanupQueue);
+      var hints = new Set();
       this.type = type;
       this.status = OPENING;
       this.flushScheduled = !1;
@@ -1127,10 +1145,12 @@
       this.writtenClientReferences = new Map();
       this.writtenServerReferences = new Map();
       this.writtenObjects = new WeakMap();
+      this.writtenImportStrings = new Map();
+      this.writtenImportStringsSize = 0;
       this.temporaryReferences = temporaryReferences;
       this.identifierPrefix = identifierPrefix || "";
       this.identifierCount = 1;
-      this.taintCleanupQueue = [];
+      this.taintCleanupQueue = cleanupQueue;
       this.onError = void 0 === onError ? defaultErrorHandler : onError;
       this.onAllReady = onAllReady;
       this.onFatalError = onFatalError;
@@ -1354,6 +1374,60 @@
             erroredTask(request, task, thenable.reason),
             task.id
           );
+        case "pending_weak":
+          var id = request.nextChunkId++,
+            keyPath = task.keyPath,
+            implicitSlot = task.implicitSlot,
+            formatContext = task.formatContext,
+            lastTimestamp = task.time,
+            debugOwner = task.debugOwner,
+            debugStack = task.debugStack,
+            debugTask = task.debugTask,
+            settled = !1;
+          thenable.then(
+            function (value) {
+              settled ||
+                request.status > OPEN ||
+                ((settled = !0),
+                (value = createTaskWithID(
+                  request,
+                  id,
+                  value,
+                  keyPath,
+                  implicitSlot,
+                  formatContext,
+                  request.abortableTasks,
+                  lastTimestamp,
+                  debugOwner,
+                  debugStack,
+                  debugTask
+                )),
+                forwardDebugInfoFromCurrentContext(request, value, thenable),
+                pingTask(request, value));
+            },
+            function (reason) {
+              if (!(settled || request.status > OPEN)) {
+                settled = !0;
+                var newTask = createTaskWithID(
+                  request,
+                  id,
+                  thenable,
+                  keyPath,
+                  implicitSlot,
+                  formatContext,
+                  request.abortableTasks,
+                  lastTimestamp,
+                  debugOwner,
+                  debugStack,
+                  debugTask
+                );
+                newTask.timed = !0;
+                erroredTask(request, newTask, reason);
+                enqueueFlush(request);
+              }
+            }
+          );
+          return id;
         default:
           var _newTask2 = createThenableTask(request, task, thenable);
           if (request.status === ABORTING)
@@ -2453,12 +2527,13 @@
           : serializeByValueID(existingId);
       try {
         var clientReferenceMetadata = resolveClientReferenceMetadata(
-          request.bundlerConfig,
-          clientReference
-        );
+            request.bundlerConfig,
+            clientReference
+          ),
+          json = stringifyImportMetadata(request, clientReferenceMetadata, !1);
         request.pendingChunks++;
         var importId = request.nextChunkId++;
-        emitImportChunk(request, importId, clientReferenceMetadata, !1);
+        emitImportChunk(request, importId, json, !1);
         writtenClientReferences.set(clientReferenceKey, importId);
         return parent[0] === REACT_ELEMENT_TYPE && "1" === parentPropertyName
           ? serializeLazyID(importId)
@@ -2490,12 +2565,13 @@
           : serializeByValueID(existingId);
       try {
         var clientReferenceMetadata = resolveClientReferenceMetadata(
-          request.bundlerConfig,
-          clientReference
-        );
+            request.bundlerConfig,
+            clientReference
+          ),
+          json = stringifyImportMetadata(request, clientReferenceMetadata, !0);
         request.pendingDebugChunks++;
         var importId = request.nextChunkId++;
-        emitImportChunk(request, importId, clientReferenceMetadata, !0);
+        emitImportChunk(request, importId, json, !0);
         return parent[0] === REACT_ELEMENT_TYPE && "1" === parentPropertyName
           ? serializeLazyID(importId)
           : serializeByValueID(importId);
@@ -2672,6 +2748,29 @@
       request.cacheController.signal.addEventListener("abort", abortBlob);
       reader.read().then(progress).catch(error);
       return "$B" + newTask.id.toString(16);
+    }
+    function escapeStringValue(value) {
+      return "$" === value[0] ? "$" + value : value;
+    }
+    function serializeImportString(request, value) {
+      if (value.length < MIN_DEDUPLICATED_IMPORT_STRING_LENGTH)
+        return escapeStringValue(value);
+      var writtenStrings = request.writtenImportStrings,
+        existing = writtenStrings.get(value);
+      if (void 0 !== existing) return existing;
+      existing = request.writtenImportStringsSize + value.length;
+      if (existing > MAX_DEDUPLICATED_IMPORT_STRINGS_SIZE)
+        return escapeStringValue(value);
+      request.writtenImportStringsSize = existing;
+      request.pendingChunks++;
+      existing = request.nextChunkId++;
+      var json = stringify(escapeStringValue(value));
+      request.completedImportChunks.push(
+        existing.toString(16) + ":" + json + "\n"
+      );
+      request = serializeByValueID(existing);
+      writtenStrings.set(value, request);
+      return request;
     }
     function renderModel(request, task, parent, key, value) {
       serializedSize += key.length;
@@ -2859,18 +2958,27 @@
           void 0 !== elementReference)
         )
           return "$T" + elementReference;
+        elementReference = TaintRegistryObjects.get(value);
+        void 0 !== elementReference && throwTaintViolation(elementReference);
         elementReference = request.writtenObjects;
         _writtenObjects = elementReference.get(value);
         if ("function" === typeof value.then) {
           if (void 0 !== _writtenObjects) {
             if (null !== task.keyPath || task.implicitSlot)
               return (
-                "$@" + serializeThenable(request, task, value).toString(16)
+                (request = serializeThenable(request, task, value)),
+                "pending_weak" === value.status
+                  ? "$w" + request.toString(16)
+                  : "$@" + request.toString(16)
               );
             if (modelRoot === value) modelRoot = null;
             else return _writtenObjects;
           }
-          request = "$@" + serializeThenable(request, task, value).toString(16);
+          request = serializeThenable(request, task, value);
+          request =
+            "pending_weak" === value.status
+              ? "$w" + request.toString(16)
+              : "$@" + request.toString(16);
           elementReference.set(value, request);
           return request;
         }
@@ -2996,15 +3104,15 @@
       }
       if ("string" === typeof value)
         return (
+          (task = TaintRegistryValues.get(value)),
+          void 0 !== task && throwTaintViolation(task.message),
           (serializedSize += value.length),
           "Z" === value[value.length - 1] &&
           parent[parentPropertyName] instanceof Date
             ? "$D" + value
             : 1024 <= value.length && null !== byteLengthOfChunk
               ? serializeLargeTextString(request, value)
-              : "$" === value[0]
-                ? "$" + value
-                : value
+              : escapeStringValue(value)
         );
       if ("boolean" === typeof value) return value;
       if ("number" === typeof value) return serializeNumber(value);
@@ -3025,6 +3133,8 @@
           void 0 !== request)
         )
           return "$T" + request;
+        request = TaintRegistryObjects.get(value);
+        void 0 !== request && throwTaintViolation(request);
         if (value.$$typeof === TEMPORARY_REFERENCE_TAG)
           throw Error(
             "Could not reference an opaque temporary reference. This is likely due to misconfiguring the temporaryReferences options on the server."
@@ -3073,7 +3183,12 @@
         task.set(value, _writtenObjects);
         return serializeByValueID(_writtenObjects);
       }
-      if ("bigint" === typeof value) return "$n" + value.toString(10);
+      if ("bigint" === typeof value)
+        return (
+          (request = TaintRegistryValues.get(value)),
+          void 0 !== request && throwTaintViolation(request.message),
+          "$n" + value.toString(10)
+        );
       throw Error(
         "Type " +
           typeof value +
@@ -3111,6 +3226,7 @@
     function fatalError(request, error) {
       var onFatalError = request.onFatalError;
       onFatalError(error);
+      cleanupTaintQueue(request);
       null !== request.destination
         ? ((request.status = CLOSED), request.destination.destroy(error))
         : ((request.status = CLOSING), (request.fatalError = error));
@@ -3198,9 +3314,93 @@
         ? request.completedDebugChunks.push(id)
         : request.completedErrorChunks.push(id);
     }
-    function emitImportChunk(request, id, clientReferenceMetadata, debug) {
-      clientReferenceMetadata = stringify(clientReferenceMetadata);
-      id = id.toString(16) + ":I" + clientReferenceMetadata + "\n";
+    function importMetadataReplacer(key, value) {
+      return "string" === typeof value
+        ? ((key = importStringRequest),
+          null === key
+            ? escapeStringValue(value)
+            : serializeImportString(key, value))
+        : value;
+    }
+    function transformImportMetadata(request, value, depth) {
+      switch (typeof value) {
+        case "string":
+          return serializeImportString(request, value);
+        case "number":
+        case "boolean":
+        case "undefined":
+          return value;
+        case "object":
+          if (null === value) return null;
+          if (
+            depth > MAX_IMPORT_METADATA_DEPTH ||
+            "function" === typeof value.toJSON
+          )
+            return NOT_PLAIN_IMPORT_METADATA;
+          if (isArrayImpl(value)) {
+            for (
+              var length = value.length, _copy = Array(length), i = 0;
+              i < length;
+              i++
+            ) {
+              var element = value[i];
+              if ("string" === typeof element)
+                _copy[i] = serializeImportString(request, element);
+              else {
+                element = transformImportMetadata(request, element, depth + 1);
+                if (element === NOT_PLAIN_IMPORT_METADATA)
+                  return NOT_PLAIN_IMPORT_METADATA;
+                _copy[i] = element;
+              }
+            }
+            return _copy;
+          }
+          length = getPrototypeOf(value);
+          if (length !== ObjectPrototype$1 && null !== length)
+            return NOT_PLAIN_IMPORT_METADATA;
+          length = Object.keys(value);
+          _copy = {};
+          for (i = 0; i < length.length; i++) {
+            element = length[i];
+            if (element in ObjectPrototype$1) return NOT_PLAIN_IMPORT_METADATA;
+            var _element = value[element];
+            if ("string" === typeof _element)
+              _copy[element] = serializeImportString(request, _element);
+            else {
+              _element = transformImportMetadata(request, _element, depth + 1);
+              if (_element === NOT_PLAIN_IMPORT_METADATA)
+                return NOT_PLAIN_IMPORT_METADATA;
+              _copy[element] = _element;
+            }
+          }
+          return _copy;
+        default:
+          return NOT_PLAIN_IMPORT_METADATA;
+      }
+    }
+    function stringifyImportMetadata(request, clientReferenceMetadata, debug) {
+      if (!debug) {
+        var copy = transformImportMetadata(request, clientReferenceMetadata, 0);
+        if (copy !== NOT_PLAIN_IMPORT_METADATA) return stringify(copy);
+      }
+      a: {
+        copy = importStringRequest;
+        importStringRequest = debug ? null : request;
+        try {
+          var JSCompiler_inline_result = stringify(
+            clientReferenceMetadata,
+            importMetadataReplacer
+          );
+          break a;
+        } finally {
+          importStringRequest = copy;
+        }
+        JSCompiler_inline_result = void 0;
+      }
+      return JSCompiler_inline_result;
+    }
+    function emitImportChunk(request, id, json, debug) {
+      id = id.toString(16) + ":I" + json + "\n";
       debug
         ? request.completedDebugChunks.push(id)
         : request.completedImportChunks.push(id);
@@ -3365,14 +3565,27 @@
       return promiseRef;
     }
     function emitTypedArrayChunk(request, id, tag, typedArray, debug) {
+      if (TaintRegistryByteLengths.has(typedArray.byteLength)) {
+        var tainted = TaintRegistryValues.get(
+          String.fromCharCode.apply(
+            String,
+            new Uint8Array(
+              typedArray.buffer,
+              typedArray.byteOffset,
+              typedArray.byteLength
+            )
+          )
+        );
+        void 0 !== tainted && throwTaintViolation(tainted.message);
+      }
       debug ? request.pendingDebugChunks++ : request.pendingChunks++;
       typedArray = new Uint8Array(
         typedArray.buffer,
         typedArray.byteOffset,
         typedArray.byteLength
       );
-      var binaryLength = typedArray.byteLength;
-      id = id.toString(16) + ":" + tag + binaryLength.toString(16) + ",";
+      tainted = typedArray.byteLength;
+      id = id.toString(16) + ":" + tag + tainted.toString(16) + ",";
       debug
         ? request.completedDebugChunks.push(
             NEXT_TWO_CHUNKS_ARE_ATOMIC,
@@ -3714,7 +3927,7 @@
           emitTextChunk(request, counter, value, !0);
           return serializeByValueID(counter);
         }
-        return "$" === value[0] ? "$" + value : value;
+        return escapeStringValue(value);
       }
       if ("boolean" === typeof value) return value;
       if ("number" === typeof value) return serializeNumber(value);
@@ -3999,7 +4212,9 @@
     function emitChunk(request, task, value) {
       var id = task.id;
       "string" === typeof value && null !== byteLengthOfChunk
-        ? emitTextChunk(request, id, value, !1)
+        ? ((task = TaintRegistryValues.get(value)),
+          void 0 !== task && throwTaintViolation(task.message),
+          emitTextChunk(request, id, value, !1))
         : value instanceof ArrayBuffer
           ? emitTypedArrayChunk(request, id, "A", new Uint8Array(value), !1)
           : value instanceof Int8Array
@@ -4331,16 +4546,17 @@
         flushBuffered(debugDestination);
       }
       0 === request.pendingChunks &&
-        ((regularChunks = request.debugDestination),
+        (request.status < ABORTING &&
+          request.cacheController.abort(
+            Error(
+              "This render completed successfully. All cacheSignals are now aborted to allow clean up of any unused resources."
+            )
+          ),
+        (regularChunks = request.debugDestination),
         0 === request.pendingDebugChunks
           ? (null !== regularChunks &&
               (regularChunks.end(), (request.debugDestination = null)),
-            request.status < ABORTING &&
-              request.cacheController.abort(
-                Error(
-                  "This render completed successfully. All cacheSignals are now aborted to allow clean up of any unused resources."
-                )
-              ),
+            cleanupTaintQueue(request),
             null !== request.destination &&
               ((request.status = CLOSED),
               request.destination.end(),
@@ -4360,7 +4576,7 @@
         requestStorage.run(request, performWork, request);
       });
       setImmediate(function () {
-        request.status === OPENING && (request.status = 11);
+        request.status === OPENING && (request.status = OPEN);
       });
     }
     function enqueueFlush(request) {
@@ -4425,8 +4641,19 @@
         logRecoverableError(request, error, null), fatalError(request, error);
       }
     }
+    function attachAbortSignal(request, signal) {
+      signal.aborted
+        ? abort(request, signal.reason)
+        : signal.addEventListener(
+            "abort",
+            function () {
+              abort(request, signal.reason);
+            },
+            { signal: request.cacheController.signal }
+          );
+    }
     function abort(request, reason) {
-      if (!(11 < request.status))
+      if (!(request.status > OPEN))
         try {
           request.status = ABORTING;
           request.abortTime = performance.now();
@@ -6521,16 +6748,28 @@
       RENDERING = 5,
       __PROTO__$1 = "__proto__",
       OPENING = 10,
+      OPEN = 11,
       ABORTING = 12,
       CLOSING = 13,
       CLOSED = 14,
       PRERENDER = 21,
       NEXT_TWO_CHUNKS_ARE_ATOMIC = Symbol(),
+      TaintRegistryObjects = ReactSharedInternalsServer.TaintRegistryObjects,
+      TaintRegistryValues = ReactSharedInternalsServer.TaintRegistryValues,
+      TaintRegistryByteLengths =
+        ReactSharedInternalsServer.TaintRegistryByteLengths,
+      TaintRegistryPendingRequests =
+        ReactSharedInternalsServer.TaintRegistryPendingRequests,
       currentRequest = null,
       canEmitDebugInfo = !1,
       serializedSize = 0,
       MAX_ROW_SIZE = 3200,
+      MIN_DEDUPLICATED_IMPORT_STRING_LENGTH = 16,
+      MAX_DEDUPLICATED_IMPORT_STRINGS_SIZE = 32768,
       modelRoot = !1,
+      importStringRequest = null,
+      MAX_IMPORT_METADATA_DEPTH = 16,
+      NOT_PLAIN_IMPORT_METADATA = {},
       CONSTRUCTOR_MARKER = Symbol(),
       debugModelRoot = null,
       debugNoOutline = null,
@@ -6849,17 +7088,7 @@
           options ? options.filterStackFrame : void 0,
           !1
         );
-        if (options && options.signal) {
-          var signal = options.signal;
-          if (signal.aborted) abort(request, signal.reason);
-          else {
-            var listener = function () {
-              abort(request, signal.reason);
-              signal.removeEventListener("abort", listener);
-            };
-            signal.addEventListener("abort", listener);
-          }
-        }
+        options && options.signal && attachAbortSignal(request, options.signal);
         startWork(request);
       });
     };
@@ -6886,17 +7115,7 @@
           options ? options.filterStackFrame : void 0,
           !1
         );
-        if (options && options.signal) {
-          var signal = options.signal;
-          if (signal.aborted) abort(request, signal.reason);
-          else {
-            var listener = function () {
-              abort(request, signal.reason);
-              signal.removeEventListener("abort", listener);
-            };
-            signal.addEventListener("abort", listener);
-          }
-        }
+        options && options.signal && attachAbortSignal(request, options.signal);
         startWork(request);
       });
     };
@@ -7007,17 +7226,7 @@
           options ? options.filterStackFrame : void 0,
           void 0 !== debugChannelReadable
         );
-      if (options && options.signal) {
-        var signal = options.signal;
-        if (signal.aborted) abort(request, signal.reason);
-        else {
-          var listener = function () {
-            abort(request, signal.reason);
-            signal.removeEventListener("abort", listener);
-          };
-          signal.addEventListener("abort", listener);
-        }
-      }
+      options && options.signal && attachAbortSignal(request, options.signal);
       if (void 0 !== debugChannelWritable) {
         var debugWritable;
         new ReadableStream(
