@@ -284,11 +284,22 @@
       );
     }
     function getElementKey(element, index) {
-      return "object" === typeof element &&
+      if (
+        "object" === typeof element &&
         null !== element &&
         null != element.key
-        ? (checkKeyStringCoercion(element.key), escape("" + element.key))
-        : index.toString(36);
+      ) {
+        if (element.key === REACT_OPTIMISTIC_KEY)
+          return (
+            console.error(
+              "React.Children helpers don't support optimisticKey."
+            ),
+            index.toString(36)
+          );
+        checkKeyStringCoercion(element.key);
+        return escape("" + element.key);
+      }
+      return index.toString(36);
     }
     function resolveThenable(thenable) {
       switch (thenable.status) {
@@ -540,6 +551,9 @@
         );
       return dispatcher;
     }
+    function useOptimistic(passthrough, reducer) {
+      return resolveDispatcher().useOptimistic(passthrough, reducer);
+    }
     function releaseAsyncTransition() {
       ReactSharedInternals.asyncTransitions--;
     }
@@ -548,6 +562,7 @@
         currentTransition = {};
       currentTransition.types =
         null !== prevTransition ? prevTransition.types : null;
+      currentTransition.gesture = null;
       currentTransition._updatedFibers = new Set();
       ReactSharedInternals.T = currentTransition;
       try {
@@ -593,7 +608,7 @@
       } else
         0 === ReactSharedInternals.asyncTransitions &&
           console.error(
-            "addTransitionType can only be called inside a `startTransition()` callback. It must be associated with a specific Transition."
+            "addTransitionType can only be called inside a `startTransition()` or `startGestureTransition()` callback. It must be associated with a specific Transition."
           ),
           startTransition(addTransitionType.bind(null, type));
     }
@@ -699,6 +714,7 @@
       REACT_ACTIVITY_TYPE = Symbol.for("react.activity"),
       REACT_VIEW_TRANSITION_TYPE = Symbol.for("react.view_transition"),
       MAYBE_ITERATOR_SYMBOL = Symbol.iterator,
+      REACT_OPTIMISTIC_KEY = Symbol.for("react.optimistic_key"),
       didWarnStateUpdateForUnmountedComponent = {},
       ReactNoopUpdateQueue = {
         isMounted: function () {
@@ -757,6 +773,7 @@
         A: null,
         T: null,
         S: null,
+        G: null,
         actQueue: null,
         asyncTransitions: 0,
         isBatchingLegacy: !1,
@@ -1031,7 +1048,9 @@
         }
         JSCompiler_inline_result && (owner = getOwner());
         hasValidKey(config) &&
-          (checkKeyStringCoercion(config.key), (key = "" + config.key));
+          (config.key === REACT_OPTIMISTIC_KEY
+            ? (key = REACT_OPTIMISTIC_KEY)
+            : (checkKeyStringCoercion(config.key), (key = "" + config.key)));
         for (propName in config)
           !hasOwnProperty.call(config, propName) ||
             "key" === propName ||
@@ -1093,7 +1112,9 @@
             "Your app (or one of its dependencies) is using an outdated JSX transform. Update to the modern JSX transform for faster performance: https://react.dev/link/new-jsx-transform"
           )),
         hasValidKey(config) &&
-          (checkKeyStringCoercion(config.key), (key = "" + config.key)),
+          (config.key === REACT_OPTIMISTIC_KEY
+            ? (key = REACT_OPTIMISTIC_KEY)
+            : (checkKeyStringCoercion(config.key), (key = "" + config.key))),
         config))
           hasOwnProperty.call(config, propName) &&
             "key" !== propName &&
@@ -1141,6 +1162,12 @@
       var refObject = { current: null };
       Object.seal(refObject);
       return refObject;
+    };
+    exports.experimental_useOptimistic = function (passthrough, reducer) {
+      console.error(
+        "useOptimistic is now in canary. Remove the experimental_ prefix. The prefixed alias will be removed in an upcoming release."
+      );
+      return useOptimistic(passthrough, reducer);
     };
     exports.forwardRef = function (render) {
       null != render && render.$$typeof === REACT_MEMO_TYPE
@@ -1232,7 +1259,51 @@
       });
       return compare;
     };
+    exports.optimisticKey = REACT_OPTIMISTIC_KEY;
     exports.startTransition = startTransition;
+    exports.unstable_SuspenseList = REACT_SUSPENSE_LIST_TYPE;
+    exports.unstable_getCacheForType = function (resourceType) {
+      var dispatcher = ReactSharedInternals.A;
+      return dispatcher
+        ? dispatcher.getCacheForType(resourceType)
+        : resourceType();
+    };
+    exports.unstable_startGestureTransition = function (
+      provider,
+      scope,
+      options
+    ) {
+      if (null == provider)
+        throw Error(
+          "A Timeline is required as the first argument to startGestureTransition."
+        );
+      var prevTransition = ReactSharedInternals.T,
+        currentTransition = { types: null };
+      currentTransition.gesture = provider;
+      currentTransition._updatedFibers = new Set();
+      ReactSharedInternals.T = currentTransition;
+      try {
+        var returnValue = scope();
+        "object" === typeof returnValue &&
+          null !== returnValue &&
+          "function" === typeof returnValue.then &&
+          console.error(
+            "Cannot use an async function in startGestureTransition. It must be able to start immediately."
+          );
+        var onStartGestureTransitionFinish = ReactSharedInternals.G;
+        if (null !== onStartGestureTransitionFinish)
+          return onStartGestureTransitionFinish(
+            currentTransition,
+            provider,
+            options
+          );
+      } catch (error) {
+        reportGlobalError(error);
+      } finally {
+        ReactSharedInternals.T = prevTransition;
+      }
+      return noop;
+    };
     exports.unstable_useCacheRefresh = function () {
       return resolveDispatcher().useCacheRefresh();
     };
@@ -1296,9 +1367,7 @@
     exports.useMemo = function (create, deps) {
       return resolveDispatcher().useMemo(create, deps);
     };
-    exports.useOptimistic = function (passthrough, reducer) {
-      return resolveDispatcher().useOptimistic(passthrough, reducer);
-    };
+    exports.useOptimistic = useOptimistic;
     exports.useReducer = function (reducer, initialArg, init) {
       return resolveDispatcher().useReducer(reducer, initialArg, init);
     };
@@ -1322,7 +1391,7 @@
     exports.useTransition = function () {
       return resolveDispatcher().useTransition();
     };
-    exports.version = "19.3.0-canary-eafeac09-20260819";
+    exports.version = "19.3.0-experimental-54ba6543-20260824";
     "undefined" !== typeof __REACT_DEVTOOLS_GLOBAL_HOOK__ &&
       "function" ===
         typeof __REACT_DEVTOOLS_GLOBAL_HOOK__.registerInternalModuleStop &&
