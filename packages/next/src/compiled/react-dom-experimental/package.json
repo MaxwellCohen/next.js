@@ -72,10 +72,10 @@
     "./package.json": "./package.json"
   },
   "dependencies": {
-    "scheduler": "0.0.0-experimental-eafeac09-20260819"
+    "scheduler": "https://pkg.csb.dev/MaxwellCohen/react/commit/54ba6543/scheduler"
   },
   "peerDependencies": {
-    "react": "0.0.0-experimental-eafeac09-20260819"
+    "react": "0.0.0-experimental-54ba6543-20260824"
   },
   "browser": {
     "./server.js": "./server.browser.js",

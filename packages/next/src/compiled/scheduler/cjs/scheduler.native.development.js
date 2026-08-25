@@ -12,7 +12,6 @@
 "production" !== process.env.NODE_ENV &&
   (function () {
     function performWorkUntilDeadline() {
-      needsPaint = !1;
       if (isMessageLoopRunning) {
         var currentTime = getCurrentTime();
         startTime = currentTime;
@@ -29,15 +28,7 @@
             try {
               b: {
                 advanceTimers(currentTime);
-                for (
-                  currentTask = peek(taskQueue);
-                  null !== currentTask &&
-                  !(
-                    currentTask.expirationTime > currentTime &&
-                    shouldYieldToHost()
-                  );
-
-                ) {
+                for (currentTask = peek(taskQueue); null !== currentTask; ) {
                   var callback = currentTask.callback;
                   if ("function" === typeof callback) {
                     currentTask.callback = null;
@@ -56,6 +47,11 @@
                     advanceTimers(currentTime);
                   } else pop(taskQueue);
                   currentTask = peek(taskQueue);
+                  if (
+                    null === currentTask ||
+                    currentTask.expirationTime > currentTime
+                  )
+                    break;
                 }
                 if (null !== currentTask) hasMoreWork = !0;
                 else {
@@ -223,15 +219,9 @@
       return currentPriorityLevel;
     }
     function shouldYieldToHost() {
-      return needsPaint
-        ? !0
-        : getCurrentTime() - startTime < frameInterval
-          ? !1
-          : !0;
+      return 5 > getCurrentTime() - startTime ? !1 : !0;
     }
-    function requestPaint() {
-      needsPaint = !0;
-    }
+    function requestPaint() {}
     function requestHostTimeout(callback, ms) {
       taskTimeoutID = localSetTimeout(function () {
         callback(getCurrentTime());
@@ -263,7 +253,6 @@
       isPerformingWork = !1,
       isHostCallbackScheduled = !1,
       isHostTimeoutScheduled = !1,
-      needsPaint = !1,
       localSetTimeout = "function" === typeof setTimeout ? setTimeout : null,
       localClearTimeout =
         "function" === typeof clearTimeout ? clearTimeout : null,
@@ -271,7 +260,6 @@
         "undefined" !== typeof setImmediate ? setImmediate : null,
       isMessageLoopRunning = !1,
       taskTimeoutID = -1,
-      frameInterval = 5,
       startTime = -1;
     if ("function" === typeof localSetImmediate)
       var schedulePerformWorkUntilDeadline = function () {

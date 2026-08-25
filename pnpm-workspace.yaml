@@ -33,7 +33,7 @@ ignoredBuiltDependencies:
 #   temporary fixture dirs in `file://./scripts/install-native.mjs`
 # - `file://./test/lib/pnpm-security-settings.js` reads and copies these values for
 #   isolated test dirs
-blockExoticSubdeps: true
+blockExoticSubdeps: false # disabled by sync-react-csb for CodeSandbox React
 minimumReleaseAge: 2880 # 48 hrs
 minimumReleaseAgeExclude:
   - '@mswjs/interceptors@0.42.0'
