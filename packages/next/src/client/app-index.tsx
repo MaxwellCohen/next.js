@@ -18,6 +18,7 @@ import { findSourceMapURL } from './app-find-source-map-url'
 import {
   type AppRouterActionQueue,
   createMutableActionQueue,
+  publicAppRouterInstance,
 } from './components/app-router-instance'
 import AppRouter from './components/app-router'
 import type { InitialRSCPayload } from '../shared/lib/app-router-types'
@@ -273,6 +274,12 @@ if (instantTestStaticFetch) {
       findSourceMapURL,
       debugChannel,
       startTime: 0,
+      // Static host elision: the inlined payload can leave out static content
+      // that React adopts from the HTML. If that content has to render with no
+      // HTML behind it (a modal or client-only wrapper mounting later, a
+      // boundary client rendering after an error), refresh the route. RSC
+      // requests are never elided, so the refresh renders the full content.
+      onElidedContentMissing: () => publicAppRouterInstance.refresh(),
     }
   )
 }

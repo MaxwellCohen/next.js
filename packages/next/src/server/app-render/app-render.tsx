@@ -4057,6 +4057,13 @@ async function renderToStream(
 
         reactServerResult = new ReactServerResult(flightStream)
       } else {
+        // Static host elision: this Flight stream feeds SSR in this process
+        // and is inlined into the HTML, so React may leave static host markup
+        // out of the inlined copy and the browser adopts it from the HTML.
+        // RSC requests (navigation, refresh, actions) never get here, so they
+        // stay full payloads. A PPR resume renders only the dynamic holes,
+        // so it keeps the full payload too.
+        const elideStaticHosts = typeof renderOpts.postponed !== 'string'
         // MARK: nodeStreams RSC
         if (process.env.__NEXT_USE_NODE_STREAMS) {
           // This is a dynamic render. We don't do dynamic tracking because we're not prerendering
@@ -4096,6 +4103,7 @@ async function renderToStream(
                 filterStackFrame,
                 onError: serverComponentsErrorHandler,
                 debugChannel: debugChannel?.serverSide,
+                elideStaticHosts,
               }
             )
           )
@@ -4138,6 +4146,7 @@ async function renderToStream(
                 filterStackFrame,
                 onError: serverComponentsErrorHandler,
                 debugChannel: debugChannel?.serverSide,
+                elideStaticHosts,
               }
             )
           )
