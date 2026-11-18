@@ -4062,8 +4062,13 @@ async function renderToStream(
         // out of the inlined copy and the browser adopts it from the HTML.
         // RSC requests (navigation, refresh, actions) never get here, so they
         // stay full payloads. A PPR resume renders only the dynamic holes,
-        // so it keeps the full payload too.
-        const elideStaticHosts = typeof renderOpts.postponed !== 'string'
+        // so it keeps the full payload too. `inPlace` names the payload keys
+        // whose elements Next renders in place: the tree (`t`), each node's
+        // data (`d`) and render output (`r`), and its child slots (`c`).
+        const elideStaticHosts =
+          typeof renderOpts.postponed !== 'string'
+            ? { inPlace: ['t', 'd', 'r', 'c'] }
+            : false
         // MARK: nodeStreams RSC
         if (process.env.__NEXT_USE_NODE_STREAMS) {
           // This is a dynamic render. We don't do dynamic tracking because we're not prerendering
