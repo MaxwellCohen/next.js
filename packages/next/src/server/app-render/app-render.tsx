@@ -10228,7 +10228,6 @@ async function prerenderToStream(
       // decoded, whose stubs restore from the adopted DOM.
       const inlinedServerResult =
         !resultIsPartial &&
-        !cachedNavigations &&
         !(fallbackRouteParams && fallbackRouteParams.size > 0)
           ? new ReactServerPrerenderResult([
               await elideStaticHostsInPrerender(flightData, ComponentMod),
