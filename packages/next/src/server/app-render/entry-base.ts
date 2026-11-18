@@ -67,7 +67,7 @@ export { taintObjectReference } from './rsc/taint'
 export {
   collectSegmentData,
   collectPrefetchHints,
-  elideStaticHostsInPayload,
+  encodeHTMLFirstPayload,
 } from './collect-segment-data'
 
 export const InstantValidation = () => {

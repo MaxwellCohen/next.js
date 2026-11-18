@@ -514,6 +514,7 @@ async function exportAppImpl(
         nextConfig.experimental.clientParamParsingOrigins,
       dynamicOnHover: nextConfig.experimental.dynamicOnHover ?? false,
       optimisticRouting: nextConfig.experimental.optimisticRouting ?? false,
+      htmlFirstFlight: nextConfig.experimental.htmlFirstFlight ?? false,
       parallelRouteMetadata:
         nextConfig.experimental.parallelRouteMetadata ?? false,
       inlineCss: nextConfig.experimental.inlineCss ?? false,

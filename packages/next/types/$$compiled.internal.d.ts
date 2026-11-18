@@ -118,9 +118,9 @@ declare module 'react-server-dom-webpack/client.browser' {
     startTime?: number
     endTime?: number
     unstable_allowPartialStream?: boolean
-    // Static host elision: called when elided content must render without
+    // HTML-first Flight: called when stubbed content must render without
     // server HTML to adopt.
-    onElidedContentMissing?: () => void
+    onMissingHTML?: () => void
   }
 
   export function createFromFetch<T>(
@@ -174,10 +174,8 @@ declare module 'react-server-dom-webpack/server.edge' {
       signal?: AbortSignal
       debugChannel?: { readable?: ReadableStream; writable?: WritableStream }
       startTime?: number
-      // Static host elision: leave static host markup out of the payload.
-      elideStaticHosts?:
-        | boolean
-        | { onValue?: (id: number, value: unknown) => void }
+      // HTML-first Flight: leave static host markup out of the payload.
+      htmlFirst?: boolean | { onValue?: (id: number, value: unknown) => void }
     }
   ): ReadableStream<Uint8Array>
 
@@ -252,10 +250,8 @@ declare module 'react-server-dom-webpack/server.node' {
       // This differs from the web API which expects { readable?, writable? }.
       debugChannel?: import('node:stream').Writable
       startTime?: number
-      // Static host elision: leave static host markup out of the payload.
-      elideStaticHosts?:
-        | boolean
-        | { onValue?: (id: number, value: unknown) => void }
+      // HTML-first Flight: leave static host markup out of the payload.
+      htmlFirst?: boolean | { onValue?: (id: number, value: unknown) => void }
     }
   ): {
     pipe<Writable extends NodeJS.WritableStream>(

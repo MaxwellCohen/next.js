@@ -189,6 +189,7 @@ async function requestHandler(
         staleTimes: nextConfig.experimental.staleTimes,
         dynamicOnHover: Boolean(nextConfig.experimental.dynamicOnHover),
         optimisticRouting: Boolean(nextConfig.experimental.optimisticRouting),
+        htmlFirstFlight: Boolean(nextConfig.experimental.htmlFirstFlight),
         parallelRouteMetadata: Boolean(
           nextConfig.experimental.parallelRouteMetadata
         ),

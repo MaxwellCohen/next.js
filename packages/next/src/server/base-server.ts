@@ -627,6 +627,7 @@ export default abstract class Server<
         dynamicOnHover: this.nextConfig.experimental.dynamicOnHover ?? false,
         optimisticRouting:
           this.nextConfig.experimental.optimisticRouting ?? false,
+        htmlFirstFlight: this.nextConfig.experimental.htmlFirstFlight ?? false,
         parallelRouteMetadata:
           this.nextConfig.experimental.parallelRouteMetadata ?? false,
         inlineCss: this.nextConfig.experimental.inlineCss ?? false,

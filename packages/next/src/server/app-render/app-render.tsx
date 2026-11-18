@@ -4016,10 +4016,10 @@ async function renderToStream(
               {
                 onError: serverComponentsErrorHandler,
                 filterStackFrame,
-                // Static host elision, as in the dynamic render below. The
+                // HTML-first Flight, as in the dynamic render below. The
                 // stage byte lengths are counted on this stream, so they
                 // match what the client caches.
-                elideStaticHosts: true,
+                htmlFirst: renderOpts.experimental.htmlFirstFlight,
               }
             ) as Readable
 
@@ -4061,13 +4061,13 @@ async function renderToStream(
 
         reactServerResult = new ReactServerResult(flightStream)
       } else {
-        // Static host elision: this Flight stream feeds SSR in this process
-        // and is inlined into the HTML, so React may leave static host markup
-        // out of the inlined copy and the browser adopts it from the HTML.
-        // RSC requests (navigation, refresh, actions) never get here, so they
-        // stay full payloads. A PPR resume elides too: the static shell's
-        // markup is already in the prerendered HTML.
-        const elideStaticHosts = true
+        // HTML-first Flight: this Flight stream feeds SSR in this process and
+        // is inlined into the HTML, so React may leave static host markup out
+        // of the inlined copy and the browser adopts it from the HTML. RSC
+        // requests (navigation, refresh, actions) never get here, so they stay
+        // full payloads. A PPR resume does this too: the static shell's markup
+        // is already in the prerendered HTML.
+        const htmlFirst = renderOpts.experimental.htmlFirstFlight
         // MARK: nodeStreams RSC
         if (process.env.__NEXT_USE_NODE_STREAMS) {
           // This is a dynamic render. We don't do dynamic tracking because we're not prerendering
@@ -4107,7 +4107,7 @@ async function renderToStream(
                 filterStackFrame,
                 onError: serverComponentsErrorHandler,
                 debugChannel: debugChannel?.serverSide,
-                elideStaticHosts,
+                htmlFirst,
               }
             )
           )
@@ -4150,7 +4150,7 @@ async function renderToStream(
                 filterStackFrame,
                 onError: serverComponentsErrorHandler,
                 debugChannel: debugChannel?.serverSide,
-                elideStaticHosts,
+                htmlFirst,
               }
             )
           )
@@ -10220,17 +10220,18 @@ async function prerenderToStream(
         )
       }
 
-      // Static host elision (see the legacy prerender path): a complete
-      // payload is inlined encoded again with static host markup left out.
+      // HTML-first Flight (see the legacy prerender path): a complete payload
+      // is inlined encoded again with static host markup left out.
       // Partial payloads have holes to wait on, and with cached navigations
       // the client reads their static stage by byte offset, so those keep it
       // as is. A complete page's cache entry reuses the elements hydration
       // decoded, whose stubs restore from the adopted DOM.
       const inlinedServerResult =
+        renderOpts.experimental.htmlFirstFlight &&
         !resultIsPartial &&
         !(fallbackRouteParams && fallbackRouteParams.size > 0)
           ? new ReactServerPrerenderResult([
-              await elideStaticHostsInPrerender(flightData, ComponentMod),
+              await encodeHTMLFirstPrerender(flightData, ComponentMod),
             ])
           : reactServerResult
 
@@ -10342,15 +10343,14 @@ async function prerenderToStream(
         ctx.pagePath,
         metadata
       )
-      // Static host elision: the payload above is stored for navigations and
+      // HTML-first Flight: the payload above is stored for navigations and
       // prefetches, so it stays complete. The copy inlined into the HTML is
       // the same payload encoded again with static host markup left out; the
       // browser adopts that markup from the HTML. No Server Component runs
       // again.
-      const inlinedFlightData = await elideStaticHostsInPrerender(
-        flightData,
-        ComponentMod
-      )
+      const inlinedFlightData = renderOpts.experimental.htmlFirstFlight
+        ? await encodeHTMLFirstPrerender(flightData, ComponentMod)
+        : null
 
       const getServerInsertedHTML = makeGetServerInsertedHTML({
         polyfills,
@@ -10365,9 +10365,11 @@ async function prerenderToStream(
         ssrErrors: allCapturedErrors,
         stream: await continueFizzStream(htmlStream, {
           inlinedDataStream: createInlinedDataStream(
-            new ReactServerPrerenderResult([
-              inlinedFlightData,
-            ]).consumeAsStream(),
+            inlinedFlightData
+              ? new ReactServerPrerenderResult([
+                  inlinedFlightData,
+                ]).consumeAsStream()
+              : reactServerResult.consumeAsStream(),
             nonce,
             formState
           ),
@@ -11330,7 +11332,7 @@ async function collectSegmentData(
   )
 }
 
-async function elideStaticHostsInPrerender(
+async function encodeHTMLFirstPrerender(
   flightData: Buffer,
   ComponentMod: AppPageModule
 ): Promise<Buffer> {
@@ -11344,7 +11346,7 @@ async function elideStaticHostsInPrerender(
         : rscModuleMapping,
     serverModuleMap: getServerModuleMap(),
   }
-  return ComponentMod.elideStaticHostsInPayload(
+  return ComponentMod.encodeHTMLFirstPayload(
     flightData,
     clientModules,
     serverConsumerManifest

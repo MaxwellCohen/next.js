@@ -1047,6 +1047,7 @@ export function createAppPageEntrypoint({
               optimisticRouting: Boolean(
                 nextConfig.experimental.optimisticRouting
               ),
+              htmlFirstFlight: Boolean(nextConfig.experimental.htmlFirstFlight),
               parallelRouteMetadata: Boolean(
                 nextConfig.experimental.parallelRouteMetadata
               ),

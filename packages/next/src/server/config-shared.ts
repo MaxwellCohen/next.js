@@ -584,6 +584,12 @@ export interface ExperimentalConfig {
   useOffline?: boolean
   optimisticRouting?: boolean
   /**
+   * HTML-first Flight: leaves static Server Component markup out of the Flight
+   * payload inlined into the HTML, and the browser adopts that markup from the
+   * HTML instead. Requires a React build with `enableFlightHTMLFirst`.
+   */
+  htmlFirstFlight?: boolean
+  /**
    * Replaces the client router's sequential action queue with a rewritten
    * concurrent implementation. The implementations are swapped at the module
    * level by the bundler; the inactive one is not included in the bundle.
@@ -2409,6 +2415,7 @@ export const defaultConfig = Object.freeze({
     useOffline: false,
     varyParams: true,
     optimisticRouting: true,
+    htmlFirstFlight: false,
     concurrentRouterQueue: false,
     instrumentationClientRouterTransitionEvents: false,
     prefetchInlining: true,
@@ -2573,6 +2580,7 @@ export interface NextConfigRuntime {
     | 'dynamicOnHover'
     | 'useOffline'
     | 'optimisticRouting'
+    | 'htmlFirstFlight'
     | 'parallelRouteMetadata'
     | 'inlineCss'
     | 'prefetchInlining'
@@ -2645,6 +2653,7 @@ export function getNextConfigRuntime(
     dynamicOnHover: ex.dynamicOnHover,
     useOffline: ex.useOffline,
     optimisticRouting: ex.optimisticRouting,
+    htmlFirstFlight: ex.htmlFirstFlight,
     parallelRouteMetadata: ex.parallelRouteMetadata,
     inlineCss: ex.inlineCss,
     prefetchInlining: ex.prefetchInlining,

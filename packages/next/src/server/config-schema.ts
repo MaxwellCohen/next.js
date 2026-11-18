@@ -251,6 +251,7 @@ export const experimentalSchema = {
   reactBrowserBailout: z.boolean().optional(),
   useOffline: z.boolean().optional(),
   optimisticRouting: z.boolean().optional(),
+  htmlFirstFlight: z.boolean().optional(),
   concurrentRouterQueue: z.boolean().optional(),
   instrumentationClientRouterTransitionEvents: z.boolean().optional(),
   varyParams: z.boolean().optional(),

@@ -19,7 +19,7 @@ import {
   type AppRouterActionQueue,
   createMutableActionQueue,
 } from './components/app-router-instance'
-import { recoverElidedContent } from './elided-content'
+import { recoverMissingHTML } from './html-first-flight'
 import AppRouter from './components/app-router'
 import type { InitialRSCPayload } from '../shared/lib/app-router-types'
 import { createInitialRouterState } from './components/router-reducer/create-initial-router-state'
@@ -274,8 +274,10 @@ if (instantTestStaticFetch) {
       findSourceMapURL,
       debugChannel,
       startTime: 0,
-      // Static host elision, see recoverElidedContent.
-      onElidedContentMissing: recoverElidedContent,
+      // HTML-first Flight, see recoverMissingHTML.
+      onMissingHTML: process.env.__NEXT_HTML_FIRST_FLIGHT
+        ? recoverMissingHTML
+        : undefined,
     }
   )
 }

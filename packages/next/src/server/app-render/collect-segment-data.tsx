@@ -155,12 +155,12 @@ function onSegmentPrerenderError(error: unknown) {
 }
 
 /**
- * Static host elision: encodes a page's Flight payload again with static host
+ * HTML-first Flight: encodes a page's Flight payload again with static host
  * markup left out, for the copy inlined into its prerendered HTML. The payload
  * is decoded and re-encoded, so no Server Component runs a second time. The
  * markup is in the HTML, which the browser adopts instead.
  */
-export async function elideStaticHostsInPayload(
+export async function encodeHTMLFirstPayload(
   fullPageDataBuffer: Buffer,
   clientModules: ManifestNode,
   serverConsumerManifest: any
@@ -174,11 +174,11 @@ export async function elideStaticHostsInPayload(
   )
   // The decoded payload is fully resolved, so this stream completes without
   // waiting on anything. SSR rendered from the complete payload, so nothing
-  // needs the elided rows.
+  // needs the left-out rows.
   return streamToBuffer(
     renderToReadableStream(payload, clientModules, {
       filterStackFrame,
-      elideStaticHosts: { onValue: () => {} },
+      htmlFirst: { onValue: () => {} },
     })
   )
 }
