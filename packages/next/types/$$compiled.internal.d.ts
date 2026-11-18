@@ -175,7 +175,9 @@ declare module 'react-server-dom-webpack/server.edge' {
       debugChannel?: { readable?: ReadableStream; writable?: WritableStream }
       startTime?: number
       // Static host elision: leave static host markup out of the payload.
-      elideStaticHosts?: boolean
+      elideStaticHosts?:
+        | boolean
+        | { onValue?: (id: number, value: unknown) => void }
     }
   ): ReadableStream<Uint8Array>
 
@@ -251,7 +253,9 @@ declare module 'react-server-dom-webpack/server.node' {
       debugChannel?: import('node:stream').Writable
       startTime?: number
       // Static host elision: leave static host markup out of the payload.
-      elideStaticHosts?: boolean
+      elideStaticHosts?:
+        | boolean
+        | { onValue?: (id: number, value: unknown) => void }
     }
   ): {
     pipe<Writable extends NodeJS.WritableStream>(

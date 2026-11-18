@@ -10286,32 +10286,12 @@ async function prerenderToStream(
           )
         )
 
-      // Static host elision: the payload above is stored for navigations and
-      // prefetches, so it stays complete. The HTML gets its own render, which
-      // React may leave static host markup out of: SSR in this process gets
-      // that markup through React's registry, and the browser adopts it from
-      // the HTML.
-      const htmlServerResult = await createReactServerPrerenderResultFromRender(
-        workUnitAsyncStorage.run(
-          prerenderLegacyStore,
-          renderFlightStream,
-          ComponentMod,
-          RSCPayload,
-          clientModules,
-          {
-            filterStackFrame,
-            onError: serverComponentsErrorHandler,
-            elideStaticHosts: true,
-          }
-        )
-      )
-
       const { stream: htmlStream } = await workUnitAsyncStorage.run(
         prerenderLegacyStore,
         renderFizzStream,
         // eslint-disable-next-line @next/internal/no-ambiguous-jsx
         <App
-          reactServerStream={htmlServerResult.asUnclosingStream()}
+          reactServerStream={reactServerResult.asUnclosingStream()}
           reactDebugStream={undefined}
           debugEndTime={undefined}
           preinitScripts={preinitScripts}
@@ -10344,6 +10324,15 @@ async function prerenderToStream(
         ctx.pagePath,
         metadata
       )
+      // Static host elision: the payload above is stored for navigations and
+      // prefetches, so it stays complete. The copy inlined into the HTML is
+      // the same payload encoded again with static host markup left out; the
+      // browser adopts that markup from the HTML. No Server Component runs
+      // again.
+      const inlinedFlightData = await elideStaticHostsInPrerender(
+        flightData,
+        ComponentMod
+      )
 
       const getServerInsertedHTML = makeGetServerInsertedHTML({
         polyfills,
@@ -10358,7 +10347,9 @@ async function prerenderToStream(
         ssrErrors: allCapturedErrors,
         stream: await continueFizzStream(htmlStream, {
           inlinedDataStream: createInlinedDataStream(
-            htmlServerResult.consumeAsStream(),
+            new ReactServerPrerenderResult([
+              inlinedFlightData,
+            ]).consumeAsStream(),
             nonce,
             formState
           ),
@@ -11318,6 +11309,27 @@ async function collectSegmentData(
     Boolean(renderOpts.experimental.prefetchInlining),
     hints,
     isUpgradeableISRFallback
+  )
+}
+
+async function elideStaticHostsInPrerender(
+  flightData: Buffer,
+  ComponentMod: AppPageModule
+): Promise<Buffer> {
+  const { clientModules, edgeRscModuleMapping, rscModuleMapping } =
+    getClientReferenceManifest()
+  const serverConsumerManifest = {
+    moduleLoading: null,
+    moduleMap:
+      process.env.NEXT_RUNTIME === 'edge'
+        ? edgeRscModuleMapping
+        : rscModuleMapping,
+    serverModuleMap: getServerModuleMap(),
+  }
+  return ComponentMod.elideStaticHostsInPayload(
+    flightData,
+    clientModules,
+    serverConsumerManifest
   )
 }
 
