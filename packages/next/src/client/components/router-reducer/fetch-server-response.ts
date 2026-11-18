@@ -44,6 +44,7 @@ import {
   bufferPrefetchResponseBody,
 } from '../segment-cache/cache'
 import { UnknownDynamicStaleTime } from '../segment-cache/bfcache'
+import { recoverElidedContent } from '../../elided-content'
 
 const createFromReadableStream =
   createFromReadableStreamBrowser as (typeof import('react-server-dom-webpack/client.browser'))['createFromReadableStream']
@@ -884,6 +885,10 @@ export function createFromNextReadableStream<T>(
     findSourceMapURL,
     debugChannel: createDebugChannel && createDebugChannel(requestHeaders),
     unstable_allowPartialStream: options?.allowPartialStream,
+    // Static host elision: the client cache decodes part of the initial
+    // payload again. Its stubs restore from the DOM hydration adopted; see
+    // recoverElidedContent for the rest. Other responses are never elided.
+    onElidedContentMissing: recoverElidedContent,
   })
 }
 

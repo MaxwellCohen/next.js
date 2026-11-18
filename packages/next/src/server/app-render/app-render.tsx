@@ -4016,6 +4016,10 @@ async function renderToStream(
               {
                 onError: serverComponentsErrorHandler,
                 filterStackFrame,
+                // Static host elision, as in the dynamic render below. The
+                // stage byte lengths are counted on this stream, so they
+                // match what the client caches.
+                elideStaticHosts: true,
               }
             ) as Readable
 
@@ -10218,11 +10222,12 @@ async function prerenderToStream(
 
       // Static host elision (see the legacy prerender path): a complete
       // payload is inlined encoded again with static host markup left out.
-      // Partial payloads have holes to wait on, and cached navigations read
-      // byte offsets of the original payload, so those keep it as is.
+      // Partial payloads have holes to wait on, and with cached navigations
+      // the client reads their static stage by byte offset, so those keep it
+      // as is. A complete page's cache entry reuses the elements hydration
+      // decoded, whose stubs restore from the adopted DOM.
       const inlinedServerResult =
         !resultIsPartial &&
-        !cachedNavigations &&
         !(fallbackRouteParams && fallbackRouteParams.size > 0)
           ? new ReactServerPrerenderResult([
               await elideStaticHostsInPrerender(flightData, ComponentMod),
