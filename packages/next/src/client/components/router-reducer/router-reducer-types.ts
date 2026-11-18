@@ -35,6 +35,12 @@ export interface RefreshAction {
    * navigation. Not exposed in production builds by default.
    */
   bypassCacheInvalidation?: boolean
+  /**
+   * Refetch the current route without invalidating the client caches. Used
+   * to recover static content that React left out of the initial payload:
+   * the other cached routes are still valid.
+   */
+  keepCaches?: boolean
 }
 
 export interface HmrRefreshAction {

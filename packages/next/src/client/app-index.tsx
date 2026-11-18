@@ -18,8 +18,9 @@ import { findSourceMapURL } from './app-find-source-map-url'
 import {
   type AppRouterActionQueue,
   createMutableActionQueue,
-  publicAppRouterInstance,
 } from './components/app-router-instance'
+import { dispatchAppRouterAction } from './components/use-action-queue'
+import { ACTION_REFRESH } from './components/router-reducer/router-reducer-types'
 import AppRouter from './components/app-router'
 import type { InitialRSCPayload } from '../shared/lib/app-router-types'
 import { createInitialRouterState } from './components/router-reducer/create-initial-router-state'
@@ -277,9 +278,13 @@ if (instantTestStaticFetch) {
       // Static host elision: the inlined payload can leave out static content
       // that React adopts from the HTML. If that content has to render with no
       // HTML behind it (a modal or client-only wrapper mounting later, a
-      // boundary client rendering after an error), refresh the route. RSC
-      // requests are never elided, so the refresh renders the full content.
-      onElidedContentMissing: () => publicAppRouterInstance.refresh(),
+      // boundary client rendering after an error), refetch the route. RSC
+      // requests are never elided, so the refetch renders the full content.
+      // The other cached routes stay valid, so the caches are kept.
+      onElidedContentMissing: () =>
+        React.startTransition(() =>
+          dispatchAppRouterAction({ type: ACTION_REFRESH, keepCaches: true })
+        ),
     }
   )
 }
