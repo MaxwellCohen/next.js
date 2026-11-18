@@ -10286,12 +10286,32 @@ async function prerenderToStream(
           )
         )
 
+      // Static host elision: the payload above is stored for navigations and
+      // prefetches, so it stays complete. The HTML gets its own render, which
+      // React may leave static host markup out of: SSR in this process gets
+      // that markup through React's registry, and the browser adopts it from
+      // the HTML.
+      const htmlServerResult = await createReactServerPrerenderResultFromRender(
+        workUnitAsyncStorage.run(
+          prerenderLegacyStore,
+          renderFlightStream,
+          ComponentMod,
+          RSCPayload,
+          clientModules,
+          {
+            filterStackFrame,
+            onError: serverComponentsErrorHandler,
+            elideStaticHosts: true,
+          }
+        )
+      )
+
       const { stream: htmlStream } = await workUnitAsyncStorage.run(
         prerenderLegacyStore,
         renderFizzStream,
         // eslint-disable-next-line @next/internal/no-ambiguous-jsx
         <App
-          reactServerStream={reactServerResult.asUnclosingStream()}
+          reactServerStream={htmlServerResult.asUnclosingStream()}
           reactDebugStream={undefined}
           debugEndTime={undefined}
           preinitScripts={preinitScripts}
@@ -10338,7 +10358,7 @@ async function prerenderToStream(
         ssrErrors: allCapturedErrors,
         stream: await continueFizzStream(htmlStream, {
           inlinedDataStream: createInlinedDataStream(
-            reactServerResult.consumeAsStream(),
+            htmlServerResult.consumeAsStream(),
             nonce,
             formState
           ),
