@@ -4061,9 +4061,9 @@ async function renderToStream(
         // and is inlined into the HTML, so React may leave static host markup
         // out of the inlined copy and the browser adopts it from the HTML.
         // RSC requests (navigation, refresh, actions) never get here, so they
-        // stay full payloads. A PPR resume renders only the dynamic holes,
-        // so it keeps the full payload too.
-        const elideStaticHosts = typeof renderOpts.postponed !== 'string'
+        // stay full payloads. A PPR resume elides too: the static shell's
+        // markup is already in the prerendered HTML.
+        const elideStaticHosts = true
         // MARK: nodeStreams RSC
         if (process.env.__NEXT_USE_NODE_STREAMS) {
           // This is a dynamic render. We don't do dynamic tracking because we're not prerendering
@@ -10216,9 +10216,22 @@ async function prerenderToStream(
         )
       }
 
+      // Static host elision (see the legacy prerender path): a complete
+      // payload is inlined encoded again with static host markup left out.
+      // Partial payloads have holes to wait on, and cached navigations read
+      // byte offsets of the original payload, so those keep it as is.
+      const inlinedServerResult =
+        !resultIsPartial &&
+        !cachedNavigations &&
+        !(fallbackRouteParams && fallbackRouteParams.size > 0)
+          ? new ReactServerPrerenderResult([
+              await elideStaticHostsInPrerender(flightData, ComponentMod),
+            ])
+          : reactServerResult
+
       const stream = await continueStaticPrerenderWithInlinedData(
         htmlStream,
-        reactServerResult,
+        inlinedServerResult,
         fallbackRouteParams,
         createInlinedDataStream,
         formState,
