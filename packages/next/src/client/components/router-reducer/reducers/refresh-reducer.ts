@@ -31,22 +31,30 @@ export function refreshReducer(
   // only used for testing and is not exposed in production builds by default.
   const bypassCacheInvalidation =
     process.env.__NEXT_EXPOSE_TESTING_API && action.bypassCacheInvalidation
-  if (!bypassCacheInvalidation) {
+  if (!bypassCacheInvalidation && !action.keepCaches) {
     const currentNextUrl = state.nextUrl
     const currentRoot = state.root
     invalidateSegmentCacheEntries(currentNextUrl, currentRoot)
   }
   // A full refresh has no HMR generation to cancel.
-  return refreshDynamicData(state, FreshnessPolicy.RefreshAll, undefined)
+  return refreshDynamicData(
+    state,
+    FreshnessPolicy.RefreshAll,
+    undefined,
+    action.keepCaches === true
+  )
 }
 
 export function refreshDynamicData(
   state: ReadonlyReducerState,
   freshnessPolicy: FreshnessPolicy.RefreshAll | FreshnessPolicy.HMRRefresh,
-  signal: AbortSignal | undefined
+  signal: AbortSignal | undefined,
+  keepBfCache: boolean = false
 ): ReducerState {
   // During a refresh, invalidate the BFCache, which may contain dynamic data.
-  invalidateBfCache()
+  if (!keepBfCache) {
+    invalidateBfCache()
+  }
 
   const currentNextUrl = state.nextUrl
 
