@@ -1,5 +1,6 @@
 import type { BinaryStreamOf } from './app-render'
 import type { Readable } from 'node:stream'
+import type { FlightTee } from 'react-server-dom-webpack/client'
 
 import {
   htmlEscapeAttributeString,
@@ -16,8 +17,11 @@ const INLINE_FLIGHT_PAYLOAD_DATA = 1
 const INLINE_FLIGHT_PAYLOAD_FORM_STATE = 2
 const INLINE_FLIGHT_PAYLOAD_BINARY = 3
 
+// HTML-first Flight: SSR reads the render through this tee instead of bytes.
+export type FlightTeeSource = { flightTee: FlightTee }
+
 const flightResponses = new WeakMap<
-  Readable | BinaryStreamOf<any>,
+  Readable | BinaryStreamOf<any> | FlightTeeSource,
   Promise<any>
 >()
 const encoder = new TextEncoder()
@@ -33,7 +37,7 @@ const findSourceMapURL =
  * This is only used for renderToHTML, the Flight response does not need additional wrappers.
  */
 export function getFlightStream<T>(
-  flightStream: Readable | BinaryStreamOf<T>,
+  flightStream: Readable | BinaryStreamOf<T> | FlightTeeSource,
   debugStream: Readable | ReadableStream<Uint8Array> | undefined,
   debugEndTime: number | undefined,
   nonce: string | undefined
@@ -48,7 +52,13 @@ export function getFlightStream<T>(
     getClientReferenceManifest()
 
   let newResponse: Promise<T>
-  if (flightStream instanceof ReadableStream) {
+  if ('flightTee' in flightStream) {
+    // The tee carries the debug rows too, so there's no debug stream to read.
+    const { createFromTee } =
+      // eslint-disable-next-line import/no-extraneous-dependencies
+      require('react-server-dom-webpack/client') as typeof import('react-server-dom-webpack/client')
+    newResponse = createFromTee<T>(flightStream.flightTee)
+  } else if (flightStream instanceof ReadableStream) {
     // The types of flightStream and debugStream should match.
     if (debugStream && !(debugStream instanceof ReadableStream)) {
       throw new InvariantError('Expected debug stream to be a ReadableStream')
@@ -150,6 +160,28 @@ export function getFlightStream<T>(
   flightResponses.set(flightStream, newResponse)
 
   return newResponse
+}
+
+/**
+ * HTML-first Flight: creates a tee for a Flight render that feeds SSR. Pass it
+ * as the render's `tee` option with `htmlFirst: true`, then read it with
+ * `getFlightStream({ flightTee })`. React leaves static host markup out of the
+ * render's bytes (inlined for the browser) and hands it to SSR through the tee.
+ */
+export function createFlightTee(nonce: string | undefined): FlightTee {
+  const { moduleLoading, edgeSSRModuleMapping, ssrModuleMapping } =
+    getClientReferenceManifest()
+  const { createTee } =
+    // eslint-disable-next-line import/no-extraneous-dependencies
+    require('react-server-dom-webpack/client') as typeof import('react-server-dom-webpack/client')
+  return createTee(
+    {
+      moduleLoading,
+      moduleMap: isEdgeRuntime ? edgeSSRModuleMapping : ssrModuleMapping,
+      serverModuleMap: null,
+    },
+    { findSourceMapURL, nonce }
+  )
 }
 
 /**

@@ -170,7 +170,11 @@ import {
 } from './postponed-state'
 import { isDynamicServerError } from '../../client/components/hooks-server-context'
 import { getServerActionRequestMetadata } from '../lib/server-action-request-meta'
-import { getFlightStream } from './use-flight-response'
+import {
+  getFlightStream,
+  createFlightTee,
+  type FlightTeeSource,
+} from './use-flight-response'
 import {
   StaticGenBailoutError,
   isStaticGenBailoutError,
@@ -2378,7 +2382,7 @@ function App<T>({
   images,
 }: {
   /* eslint-disable @next/internal/no-ambiguous-jsx -- React Client */
-  reactServerStream: Readable | BinaryStreamOf<T>
+  reactServerStream: Readable | BinaryStreamOf<T> | FlightTeeSource
   reactDebugStream: AnyStream | undefined
   debugEndTime: number | undefined
   preinitScripts: () => void
@@ -3764,6 +3768,12 @@ async function renderToStream(
 
     let reactServerResult: null | ReactServerResult = null
     let reactDebugStream: AnyStream | undefined
+    // HTML-first Flight: set when SSR reads the Flight render through a tee.
+    let flightTee: ReturnType<typeof createFlightTee> | undefined
+    // A resume whose HTML is already complete has no SSR to read the tee.
+    const useFlightTee =
+      renderOpts.experimental.htmlFirstFlight &&
+      postponedState?.type !== DynamicState.DATA
 
     const setHeader = res.setHeader.bind(res)
     const appendHeader = res.appendHeader.bind(res)
@@ -4003,6 +4013,7 @@ async function renderToStream(
                 immediateTracker,
                 runInSequentialTasks<Readable>
               ) as typeof runInSequentialTasks<Readable>)
+        flightTee = useFlightTee ? createFlightTee(nonce) : undefined
         const flightStream = await runRenderTasks(
           () => {
             stageController.advanceStage(RenderStage.ShellStatic)
@@ -4019,7 +4030,8 @@ async function renderToStream(
                 // HTML-first Flight, as in the dynamic render below. The
                 // stage byte lengths are counted on this stream, so they
                 // match what the client caches.
-                htmlFirst: renderOpts.experimental.htmlFirstFlight,
+                htmlFirst: flightTee !== undefined,
+                tee: flightTee,
               }
             ) as Readable
 
@@ -4063,11 +4075,13 @@ async function renderToStream(
       } else {
         // HTML-first Flight: this Flight stream feeds SSR in this process and
         // is inlined into the HTML, so React may leave static host markup out
-        // of the inlined copy and the browser adopts it from the HTML. RSC
+        // of the inlined copy and the browser adopts it from the HTML. SSR
+        // reads the render through a tee, which gets that markup. RSC
         // requests (navigation, refresh, actions) never get here, so they stay
         // full payloads. A PPR resume does this too: the static shell's markup
         // is already in the prerendered HTML.
-        const htmlFirst = renderOpts.experimental.htmlFirstFlight
+        flightTee = useFlightTee ? createFlightTee(nonce) : undefined
+        const htmlFirst = flightTee !== undefined
         // MARK: nodeStreams RSC
         if (process.env.__NEXT_USE_NODE_STREAMS) {
           // This is a dynamic render. We don't do dynamic tracking because we're not prerendering
@@ -4108,6 +4122,7 @@ async function renderToStream(
                 onError: serverComponentsErrorHandler,
                 debugChannel: debugChannel?.serverSide,
                 htmlFirst,
+                tee: flightTee,
               }
             )
           )
@@ -4151,6 +4166,7 @@ async function renderToStream(
                 onError: serverComponentsErrorHandler,
                 debugChannel: debugChannel?.serverSide,
                 htmlFirst,
+                tee: flightTee,
               }
             )
           )
@@ -4194,7 +4210,9 @@ async function renderToStream(
 
             const resumeAppElement = (
               <App
-                reactServerStream={reactServerResult.tee()}
+                reactServerStream={
+                  flightTee ? { flightTee } : reactServerResult.tee()
+                }
                 reactDebugStream={reactDebugStream}
                 debugEndTime={undefined}
                 preinitScripts={preinitScripts}
@@ -4254,7 +4272,9 @@ async function renderToStream(
 
         const appElement = (
           <App
-            reactServerStream={reactServerResult.tee()}
+            reactServerStream={
+              flightTee ? { flightTee } : reactServerResult.tee()
+            }
             // TODO: Pass Node.js debugStream
             reactDebugStream={reactDebugStream}
             debugEndTime={undefined}
@@ -4337,7 +4357,9 @@ async function renderToStream(
 
             const resumeAppElement = (
               <App
-                reactServerStream={reactServerResult.tee()}
+                reactServerStream={
+                  flightTee ? { flightTee } : reactServerResult.tee()
+                }
                 reactDebugStream={reactDebugStream}
                 debugEndTime={undefined}
                 preinitScripts={preinitScripts}
@@ -4397,7 +4419,9 @@ async function renderToStream(
 
         const appElement = (
           <App
-            reactServerStream={reactServerResult.tee()}
+            reactServerStream={
+              flightTee ? { flightTee } : reactServerResult.tee()
+            }
             reactDebugStream={reactDebugStream}
             debugEndTime={undefined}
             preinitScripts={preinitScripts}

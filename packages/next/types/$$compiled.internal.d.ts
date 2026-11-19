@@ -66,6 +66,16 @@ declare module 'react-server-dom-webpack/client' {
     options?: Options
   ): Promise<T>
 
+  // HTML-first Flight: a tee reads a Flight render in this process.
+  export type FlightTee = { readonly _version: number }
+
+  export function createTee(
+    serverConsumerManifest: Options['serverConsumerManifest'],
+    options?: Pick<Options, 'nonce' | 'findSourceMapURL'>
+  ): FlightTee
+
+  export function createFromTee<T>(tee: FlightTee): Promise<T>
+
   export function createFromNodeStream<T>(
     stream: import('node:stream').Readable,
     serverConsumerManifest: Options['serverConsumerManifest'],
@@ -176,6 +186,8 @@ declare module 'react-server-dom-webpack/server.edge' {
       startTime?: number
       // HTML-first Flight: leave static host markup out of the payload.
       htmlFirst?: boolean | { onValue?: (id: number, value: unknown) => void }
+      // Hands the render to an in-process reader (client createTee).
+      tee?: import('react-server-dom-webpack/client').FlightTee
     }
   ): ReadableStream<Uint8Array>
 
@@ -252,6 +264,8 @@ declare module 'react-server-dom-webpack/server.node' {
       startTime?: number
       // HTML-first Flight: leave static host markup out of the payload.
       htmlFirst?: boolean | { onValue?: (id: number, value: unknown) => void }
+      // Hands the render to an in-process reader (client createTee).
+      tee?: import('react-server-dom-webpack/client').FlightTee
     }
   ): {
     pipe<Writable extends NodeJS.WritableStream>(
