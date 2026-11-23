@@ -173,6 +173,7 @@ import { getServerActionRequestMetadata } from '../lib/server-action-request-met
 import {
   getFlightStream,
   createFlightTee,
+  createHTMLFirstSignal,
   type FlightTeeSource,
 } from './use-flight-response'
 import {
@@ -3756,7 +3757,7 @@ async function renderToStream(
     }
 
     const allCapturedErrors: Array<unknown> = []
-    const htmlRendererErrorHandler = createHTMLErrorHandler(
+    const reportHTMLRenderError = createHTMLErrorHandler(
       process.env.NODE_ENV === 'development',
       isBuildTimePrerendering,
       ctx.renderOpts.experimental.reactBrowserBailout,
@@ -3774,6 +3775,25 @@ async function renderToStream(
     const useFlightTee =
       renderOpts.experimental.htmlFirstFlight &&
       postponedState?.type !== DynamicState.DATA
+    // Tells React when the HTML render that reads the tee is done (see
+    // `createHTMLFirstSignal`). It settles on every path: Fizz `onAllReady`
+    // resolves it; any Fizz `onError`, a shell error (the catch below) or an
+    // abort rejects it.
+    const htmlFirstSignal = useFlightTee ? createHTMLFirstSignal() : undefined
+    const htmlRendererErrorHandler: typeof reportHTMLRenderError = (
+      ...args
+    ) => {
+      htmlFirstSignal?.reject()
+      return reportHTMLRenderError(...args)
+    }
+    const onHTMLAllReady = () => {
+      htmlFirstSignal?.resolve()
+      finishHtmlRender()
+    }
+    const onHTMLRenderFailed = () => {
+      htmlFirstSignal?.reject()
+      finishHtmlRender()
+    }
 
     const setHeader = res.setHeader.bind(res)
     const appendHeader = res.appendHeader.bind(res)
@@ -4030,7 +4050,7 @@ async function renderToStream(
                 // HTML-first Flight, as in the dynamic render below. The
                 // stage byte lengths are counted on this stream, so they
                 // match what the client caches.
-                htmlFirst: flightTee !== undefined,
+                htmlFirst: htmlFirstSignal?.signal,
                 tee: flightTee,
               }
             ) as Readable
@@ -4081,7 +4101,7 @@ async function renderToStream(
         // full payloads. A PPR resume does this too: the static shell's markup
         // is already in the prerendered HTML.
         flightTee = useFlightTee ? createFlightTee(nonce) : undefined
-        const htmlFirst = flightTee !== undefined
+        const htmlFirst = htmlFirstSignal?.signal
         // MARK: nodeStreams RSC
         if (process.env.__NEXT_USE_NODE_STREAMS) {
           // This is a dynamic render. We don't do dynamic tracking because we're not prerendering
@@ -4237,7 +4257,7 @@ async function renderToStream(
               postponed,
               {
                 onError: htmlRendererErrorHandler,
-                onAllReady: finishHtmlRender,
+                onAllReady: onHTMLAllReady,
                 nonce,
               }
             )
@@ -4287,7 +4307,7 @@ async function renderToStream(
 
         const fizzOptions = {
           onError: htmlRendererErrorHandler,
-          onAllReady: finishHtmlRender,
+          onAllReady: onHTMLAllReady,
           nonce,
           onHeaders: (headers: { [header: string]: string }) => {
             for (const key in headers) {
@@ -4387,7 +4407,7 @@ async function renderToStream(
               )
 
             // Finish after React renders everything inside Suspense boundaries.
-            void allReady.then(finishHtmlRender, finishHtmlRender)
+            void allReady.then(onHTMLAllReady, onHTMLRenderFailed)
 
             return await continueDynamicHTMLResumeWeb(htmlStream, {
               delayDataUntilFirstHtmlChunk:
@@ -4453,7 +4473,7 @@ async function renderToStream(
         )
 
         // Finish after React renders everything inside Suspense boundaries.
-        void allReady.then(finishHtmlRender, finishHtmlRender)
+        void allReady.then(onHTMLAllReady, onHTMLRenderFailed)
 
         return await continueFizzStream(htmlStream, {
           inlinedDataStream: createWebInlinedDataStream(
@@ -4471,6 +4491,8 @@ async function renderToStream(
       }
       // MARK: renderToStream errorRecovery
     } catch (err) {
+      // The HTML render that reads the tee failed (or never started).
+      htmlFirstSignal?.reject()
       if (
         isStaticGenBailoutError(err) ||
         (typeof err === 'object' &&

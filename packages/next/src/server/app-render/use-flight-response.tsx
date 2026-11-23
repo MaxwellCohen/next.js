@@ -1,5 +1,6 @@
 import type { BinaryStreamOf } from './app-render'
 import type { Readable } from 'node:stream'
+import type { FlightRenderOptions } from './stream-ops'
 import type { FlightTee } from 'react-server-dom-webpack/client'
 
 import {
@@ -164,9 +165,10 @@ export function getFlightStream<T>(
 
 /**
  * HTML-first Flight: creates a tee for a Flight render that feeds SSR. Pass it
- * as the render's `tee` option with `htmlFirst: true`, then read it with
- * `getFlightStream({ flightTee })`. React leaves static host markup out of the
- * render's bytes (inlined for the browser) and hands it to SSR through the tee.
+ * as the render's `tee` option together with the `htmlFirst` signal from
+ * `createHTMLFirstSignal()`, then read it with `getFlightStream({ flightTee })`.
+ * React leaves static host markup out of the render's bytes (inlined for the
+ * browser) and hands it to SSR through the tee.
  */
 export function createFlightTee(nonce: string | undefined): FlightTee {
   const { moduleLoading, edgeSSRModuleMapping, ssrModuleMapping } =
@@ -182,6 +184,37 @@ export function createFlightTee(nonce: string | undefined): FlightTee {
     },
     { findSourceMapURL, nonce }
   )
+}
+
+/**
+ * HTML-first Flight: the `htmlFirst` option for a render that feeds SSR through
+ * a tee. React keeps the render's byte stream open until it settles. Resolve it
+ * when the HTML render that reads the tee is complete, and reject it when that
+ * render failed or was aborted (any Fizz `onError`, a shell error), so React
+ * writes the stubbed rows into the bytes. Settling twice is a no-op, so the
+ * first outcome wins.
+ */
+export function createHTMLFirstSignal(): {
+  signal: NonNullable<FlightRenderOptions['htmlFirst']>
+  resolve: () => void
+  reject: () => void
+} {
+  let resolve!: () => void
+  let reject!: () => void
+  const signal = new Promise<void>((res, rej) => {
+    resolve = res
+    reject = () => rej(new Error('HTML render did not complete'))
+  })
+  // React attaches its own handlers; this keeps a rejection from ever being
+  // unhandled if it settles before that.
+  signal.catch(() => {})
+  return {
+    // TODO: the vendored React types only know `htmlFirst: boolean | {onValue}`.
+    // Drop the cast once they include the thenable form.
+    signal: signal as unknown as NonNullable<FlightRenderOptions['htmlFirst']>,
+    resolve,
+    reject,
+  }
 }
 
 /**
